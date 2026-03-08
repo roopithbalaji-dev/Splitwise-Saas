@@ -68,7 +68,7 @@ conn.commit()
 if "user" not in st.session_state:
     st.session_state.user = None
 
-st.title("💳 Splitwise SaaS Dashboard")
+st.title("💳 Splitwise - ಪಂಗಡ")
 
 if st.session_state.user is None:
 
@@ -420,4 +420,5 @@ if not df.empty:
     "Download Excel",
     excel,
     "expenses.xlsx"
+
     )
