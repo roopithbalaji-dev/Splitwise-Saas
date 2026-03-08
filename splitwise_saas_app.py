@@ -173,21 +173,65 @@ with c3:
 with c4:
     date = st.date_input("Date")
 
+split_mode = st.radio(
+"Split Type",
+["Equal Split","Unequal Split"]
+)
+
 split = st.multiselect("Split Between",friends,default=friends)
+
+amount_inputs = {}
+
+if split_mode == "Unequal Split" and len(split) > 0:
+
+    st.subheader("Enter amount per person")
+
+    for person in split:
+        amount_inputs[person] = st.number_input(
+            f"{person}",
+            min_value=0.0,
+            key=f"amt_{person}"
+        )
 
 if st.button("Add Expense"):
 
     if len(split) > 0:
 
-        share = amount/len(split)
+        # ----------------
+        # Equal split
+        # ----------------
 
-        for person in split:
+        if split_mode == "Equal Split":
 
-            cursor.execute("""
-            INSERT INTO expenses
-            (group_id,date,description,paid_by,person,amount)
-            VALUES(?,?,?,?,?,?)
-            """,(group_id,str(date),desc,payer,person,share))
+            share = amount / len(split)
+
+            for person in split:
+
+                cursor.execute("""
+                INSERT INTO expenses
+                (group_id,date,description,paid_by,person,amount)
+                VALUES(?,?,?,?,?,?)
+                """,(group_id,str(date),desc,payer,person,share))
+
+        # ----------------
+        # Unequal split
+        # ----------------
+
+        else:
+
+            total_entered = sum(amount_inputs.values())
+
+            if abs(total_entered - amount) > 0.01:
+                st.error("Entered amounts must equal total expense")
+                st.stop()
+
+            for person,val in amount_inputs.items():
+
+                cursor.execute("""
+                INSERT INTO expenses
+                (group_id,date,description,paid_by,person,amount)
+                VALUES(?,?,?,?,?,?)
+                """,(group_id,str(date),desc,payer,person,val))
 
         conn.commit()
 
@@ -422,4 +466,5 @@ if not df.empty:
     "expenses.xlsx"
 
     )
+
 
