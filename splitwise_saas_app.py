@@ -300,14 +300,14 @@ if not df.empty:
         new_desc = st.text_input(
     "Description",
     selected["description"],
-    key="edit_desc"
+    key=f"edit_desc_{expense_id}"
 )
 
     with c2:
         new_amount = st.number_input(
     "Amount",
     value=float(selected["amount"]),
-    key="edit_amount"
+    key=f"edit_amount_{expense_id}"
 )
 
     with c3:
@@ -315,14 +315,14 @@ if not df.empty:
     "Paid By",
     friends,
     index=friends.index(selected["paid_by"]),
-    key="edit_payer"
+    key=f"edit_payer_{expense_id}"
 )
 
     with c4:
         new_date = st.date_input(
     "Date",
     pd.to_datetime(selected["date"]),
-    key="edit_date"
+    key=f"edit_date_{expense_id}"
 )
 
     col1,col2 = st.columns(2)
@@ -466,5 +466,6 @@ if not df.empty:
     "expenses.xlsx"
 
     )
+
 
 
