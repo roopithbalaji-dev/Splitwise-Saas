@@ -254,7 +254,7 @@ CATEGORIES = [
 ]
 
 COMMON_CURRENCIES = [
-    "EUR", "USD", "GBP", "INR", "JPY", "AED", "SGD","LEI",
+    "EUR", "USD", "GBP", "INR", "JPY", "AED", "SGD",
     "CHF", "AUD", "CAD", "THB", "MYR", "IDR", "KRW", "HKD",
 ]
 
@@ -771,19 +771,32 @@ with tab_analytics:
         spend_person = df.groupby("paid_by")["amount_base"].sum().reset_index()
         spend_person.columns = ["Person", "Total"]
 
+        def apply_theme(fig, extra=None):
+            layout = dict(
+                template="plotly_dark",
+                paper_bgcolor="#0D1219",
+                plot_bgcolor="#0D1219",
+                font_color="#8AA0BC",
+                margin=dict(t=44, b=20, l=10, r=10),
+            )
+            if extra:
+                layout.update(extra)
+            fig.update_layout(**layout)
+            return fig
+
         with a1:
             fig = px.bar(spend_person, x="Person", y="Total", color="Person",
                          title=f"Spending by Person ({base_currency})",
-                         color_discrete_sequence=PALETTE, **PLOTLY_THEME)
-            fig.update_layout(showlegend=False, margin=dict(t=40,b=20,l=10,r=10))
+                         color_discrete_sequence=PALETTE)
+            apply_theme(fig, {"showlegend": False})
             fig.update_traces(marker_line_width=0)
             st.plotly_chart(fig, use_container_width=True)
 
         with a2:
             fig2 = px.pie(spend_person, values="Total", names="Person",
                           title="Expense Share by Person",
-                          color_discrete_sequence=PALETTE, **PLOTLY_THEME, hole=0.45)
-            fig2.update_layout(margin=dict(t=40,b=20,l=10,r=10))
+                          color_discrete_sequence=PALETTE, hole=0.45)
+            apply_theme(fig2)
             st.plotly_chart(fig2, use_container_width=True)
 
         a3, a4 = st.columns(2)
@@ -795,8 +808,8 @@ with tab_analytics:
             with a3:
                 fig3 = px.bar(spend_cat, x="Total", y="Category", orientation="h",
                               color="Category", title=f"Spending by Category ({base_currency})",
-                              color_discrete_sequence=PALETTE, **PLOTLY_THEME)
-                fig3.update_layout(showlegend=False, margin=dict(t=40,b=20,l=10,r=10))
+                              color_discrete_sequence=PALETTE)
+                apply_theme(fig3, {"showlegend": False})
                 fig3.update_traces(marker_line_width=0)
                 st.plotly_chart(fig3, use_container_width=True)
 
@@ -808,9 +821,9 @@ with tab_analytics:
         with a4:
             fig4 = px.area(time_agg, x="Date", y="Cumulative",
                            title=f"Cumulative Spend ({base_currency})",
-                           **PLOTLY_THEME, color_discrete_sequence=["#5B9CF6"])
+                           color_discrete_sequence=["#5B9CF6"])
+            apply_theme(fig4)
             fig4.update_traces(fill="tozeroy", line_width=2)
-            fig4.update_layout(margin=dict(t=40,b=20,l=10,r=10))
             st.plotly_chart(fig4, use_container_width=True)
 
         # Per-person breakdown by category
@@ -819,8 +832,8 @@ with tab_analytics:
         person_cat.columns = ["Person","Category","Amount"]
         fig5 = px.bar(person_cat, x="Person", y="Amount", color="Category",
                       title=f"Expense Breakdown per Person ({base_currency})",
-                      color_discrete_sequence=PALETTE, barmode="stack", **PLOTLY_THEME)
-        fig5.update_layout(margin=dict(t=40,b=20,l=10,r=10))
+                      color_discrete_sequence=PALETTE, barmode="stack")
+        apply_theme(fig5)
         st.plotly_chart(fig5, use_container_width=True)
 
 # ══════════════════════════════════════════════
