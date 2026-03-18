@@ -487,13 +487,15 @@ with tab_overview:
     k5.metric("Top Category",                top_cat.split()[-1] if top_cat != "—" else "—")
 
     st.markdown("---")
-    col_bal, col_settle = st.columns(2, gap="large")
 
-    # Balances
-    with col_bal:
-        st.markdown('<div class="section-label">💰 Balances</div>', unsafe_allow_html=True)
-        if members and not df.empty:
-            balance = compute_balances(df, members)
+    if members and not df.empty:
+        balance = compute_balances(df, members)
+
+        # ── Row 1: Net Balances + Pairwise Individual Amounts ─────────────
+        col_bal, col_pair = st.columns(2, gap="large")
+
+        with col_bal:
+            st.markdown('<div class="section-label">💰 Net Balances</div>', unsafe_allow_html=True)
             for person, bal in sorted(balance.items(), key=lambda x: -x[1]):
                 color  = "#00D4AA" if bal >= 0 else "#F06090"
                 symbol = "▲" if bal >= 0 else "▼"
@@ -507,28 +509,71 @@ with tab_overview:
                     </span>
                 </div>
                 """, unsafe_allow_html=True)
-        else:
-            st.markdown('<div class="empty-state"><div class="emoji">💳</div><p>Add members &amp; expenses<br>to see balances.</p></div>', unsafe_allow_html=True)
 
-    # Settlements
-    with col_settle:
-        st.markdown('<div class="section-label">🔄 Settlement Suggestions</div>', unsafe_allow_html=True)
-        if members and not df.empty:
-            balance     = compute_balances(df, members)
-            settlements = compute_settlements(balance)
-            if settlements:
-                for debtor, creditor, amt in settlements:
+        with col_pair:
+            st.markdown('<div class="section-label">🔗 Individual Amounts Owed</div>', unsafe_allow_html=True)
+            # Pairwise: for every (A, B) pair, calculate net amount A owes B
+            # = sum(rows where paid_by=B, person=A) - sum(rows where paid_by=A, person=B)
+            # If positive → A owes B; if negative → B owes A
+            any_pair = False
+            for i, person_a in enumerate(members):
+                for person_b in members[i+1:]:
+                    b_paid_for_a = df[(df["paid_by"] == person_b) & (df["person"] == person_a)]["amount_base"].sum()
+                    a_paid_for_b = df[(df["paid_by"] == person_a) & (df["person"] == person_b)]["amount_base"].sum()
+                    net = round(b_paid_for_a - a_paid_for_b, 2)
+                    if abs(net) < 0.01:
+                        continue
+                    any_pair = True
+                    if net > 0:
+                        debtor, creditor, amt = person_a, person_b, net
+                    else:
+                        debtor, creditor, amt = person_b, person_a, -net
                     st.markdown(f"""
-                    <div class="settlement-row">
-                        <span class="settle-name">👤 {debtor}</span>
-                        <span class="settle-arrow">→</span>
-                        <span class="settle-name">👤 {creditor}</span>
-                        <span class="settle-amount">{base_currency} {amt:,.2f}</span>
+                    <div class="member-row" style="justify-content:space-between;">
+                        <div style="display:flex;align-items:center;gap:8px;">
+                            <span style="color:#C0CCD8;font-weight:600;">👤 {debtor}</span>
+                            <span style="color:#5B9CF6;font-size:0.9rem;">owes</span>
+                            <span style="color:#C0CCD8;font-weight:600;">👤 {creditor}</span>
+                        </div>
+                        <span style="color:#F0A500;font-family:'JetBrains Mono',monospace;font-weight:700;">
+                            {base_currency} {amt:,.2f}
+                        </span>
                     </div>
                     """, unsafe_allow_html=True)
-            else:
-                st.success("✅ Everyone is settled up!")
+            if not any_pair:
+                st.success("✅ No individual amounts outstanding!")
+
+        # ── Row 2: Settlement Suggestions (full width) ────────────────────
+        st.markdown("---")
+        st.markdown('<div class="section-label">🔄 Settlement Suggestions — Minimum Transactions</div>', unsafe_allow_html=True)
+        settlements = compute_settlements(balance)
+        if settlements:
+            s_cols = st.columns(min(len(settlements), 3), gap="medium")
+            for idx, (debtor, creditor, amt) in enumerate(settlements):
+                with s_cols[idx % len(s_cols)]:
+                    st.markdown(f"""
+                    <div class="settlement-row" style="flex-direction:column;align-items:flex-start;gap:8px;">
+                        <div style="display:flex;align-items:center;justify-content:space-between;width:100%;">
+                            <span style="color:#5A7090;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.08em;">Payment {idx+1}</span>
+                            <span class="settle-amount">{base_currency} {amt:,.2f}</span>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:10px;width:100%;">
+                            <span class="settle-name">👤 {debtor}</span>
+                            <span class="settle-arrow" style="flex:1;text-align:center;">→ pays →</span>
+                            <span class="settle-name">👤 {creditor}</span>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
         else:
+            st.success("✅ Everyone is settled up — no payments needed!")
+
+    else:
+        col_bal, col_settle = st.columns(2, gap="large")
+        with col_bal:
+            st.markdown('<div class="section-label">💰 Net Balances</div>', unsafe_allow_html=True)
+            st.markdown('<div class="empty-state"><div class="emoji">💳</div><p>Add members &amp; expenses<br>to see balances.</p></div>', unsafe_allow_html=True)
+        with col_settle:
+            st.markdown('<div class="section-label">🔄 Settlement Suggestions</div>', unsafe_allow_html=True)
             st.markdown('<div class="empty-state"><div class="emoji">🤝</div><p>Settlements appear<br>once expenses are logged.</p></div>', unsafe_allow_html=True)
 
     st.markdown("---")
