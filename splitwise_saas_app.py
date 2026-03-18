@@ -254,7 +254,7 @@ CATEGORIES = [
 ]
 
 COMMON_CURRENCIES = [
-    "EUR", "USD", "GBP", "INR", "JPY", "AED", "SGD","LEI"
+    "EUR", "USD", "GBP", "INR", "JPY", "AED", "SGD","LEI",
     "CHF", "AUD", "CAD", "THB", "MYR", "IDR", "KRW", "HKD",
 ]
 
