@@ -540,101 +540,100 @@ with tab_overview:
 with tab_add:
 
     if not members:
-        st.warning("⚠️ Add members first in the **Manage** tab.")
-        st.stop()
-    if not currencies_map:
-        st.warning("⚠️ No currencies configured. Go to **Manage** tab.")
-        st.stop()
+        st.warning("⚠️ No members yet — add them in the **Manage** tab first.")
+        st.markdown('<div class="empty-state"><div class="emoji">👥</div><p>Head to <strong>Manage → Members</strong><br>to add people to this trip.</p></div>', unsafe_allow_html=True)
+    elif not currencies_map:
+        st.warning("⚠️ No currencies configured. Go to the **Manage** tab.")
+    else:
+        all_curr = list(currencies_map.keys())
 
-    all_curr = list(currencies_map.keys())
+        st.markdown('<div class="section-label">Expense Details</div>', unsafe_allow_html=True)
+        c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
+        with c1:
+            desc     = st.text_input("Description", placeholder="Hotel Bali...", key="add_desc")
+        with c2:
+            exp_curr = st.selectbox("Currency", all_curr, key="add_curr")
+        with c3:
+            amount   = st.number_input("Amount", min_value=0.0, step=0.01, format="%.2f", key="add_amount")
+        with c4:
+            exp_date = st.date_input("Date", datetime.today(), key="add_date")
 
-    st.markdown('<div class="section-label">Expense Details</div>', unsafe_allow_html=True)
-    c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
-    with c1:
-        desc     = st.text_input("Description", placeholder="Hotel Bali...", key="add_desc")
-    with c2:
-        exp_curr = st.selectbox("Currency", all_curr, key="add_curr")
-    with c3:
-        amount   = st.number_input("Amount", min_value=0.0, step=0.01, format="%.2f", key="add_amount")
-    with c4:
-        exp_date = st.date_input("Date", datetime.today(), key="add_date")
+        c5, c6 = st.columns(2)
+        with c5:
+            payer    = st.selectbox("Paid By", members, key="add_payer")
+        with c6:
+            category = st.selectbox("Category", CATEGORIES, key="add_cat")
 
-    c5, c6 = st.columns(2)
-    with c5:
-        payer    = st.selectbox("Paid By", members, key="add_payer")
-    with c6:
-        category = st.selectbox("Category", CATEGORIES, key="add_cat")
+        # Live conversion preview
+        if exp_curr != base_currency and amount > 0:
+            rate       = currencies_map.get(exp_curr, 1.0)
+            base_equiv = to_base(amount, exp_curr, currencies_map, base_currency)
+            st.markdown(f"""
+            <div class="conv-info">
+                💱 <span>{exp_curr} {amount:,.2f}</span>
+                &nbsp;→&nbsp;
+                <strong>{base_currency} {base_equiv:,.2f}</strong>
+                <span style="margin-left:auto;font-size:0.78rem;color:#3A5070;">
+                    1 {base_currency} = {rate} {exp_curr}
+                </span>
+            </div>
+            """, unsafe_allow_html=True)
 
-    # Live conversion preview
-    if exp_curr != base_currency and amount > 0:
-        rate       = currencies_map.get(exp_curr, 1.0)
-        base_equiv = to_base(amount, exp_curr, currencies_map, base_currency)
-        st.markdown(f"""
-        <div class="conv-info">
-            💱 <span>{exp_curr} {amount:,.2f}</span>
-            &nbsp;→&nbsp;
-            <strong>{base_currency} {base_equiv:,.2f}</strong>
-            <span style="margin-left:auto;font-size:0.78rem;color:#3A5070;">
-                1 {base_currency} = {rate} {exp_curr}
-            </span>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown('<div class="section-label">Split Configuration</div>', unsafe_allow_html=True)
+        split_mode    = st.radio("Split Type", ["Equal Split", "Unequal Split"], horizontal=True, key="add_split_mode")
+        split_between = st.multiselect("Split Between", members, default=members, key="add_split_between")
 
-    st.markdown('<div class="section-label">Split Configuration</div>', unsafe_allow_html=True)
-    split_mode    = st.radio("Split Type", ["Equal Split", "Unequal Split"], horizontal=True, key="add_split_mode")
-    split_between = st.multiselect("Split Between", members, default=members, key="add_split_between")
-
-    amount_inputs = {}
-    if split_mode == "Unequal Split" and split_between:
-        st.markdown("**Enter each person's share** (must total the expense amount):")
-        cols = st.columns(min(len(split_between), 4))
-        for i, person in enumerate(split_between):
-            amount_inputs[person] = cols[i % 4].number_input(
-                person, min_value=0.0, step=0.01, format="%.2f", key=f"unequal_{person}"
+        amount_inputs = {}
+        if split_mode == "Unequal Split" and split_between:
+            st.markdown("**Enter each person's share** (must total the expense amount):")
+            cols = st.columns(min(len(split_between), 4))
+            for i, person in enumerate(split_between):
+                amount_inputs[person] = cols[i % 4].number_input(
+                    person, min_value=0.0, step=0.01, format="%.2f", key=f"unequal_{person}"
+                )
+            entered_total = sum(amount_inputs.values())
+            ok    = abs(entered_total - amount) < 0.01
+            color = "#00D4AA" if ok else "#F06090"
+            st.markdown(
+                f"<span style='color:{color};font-size:0.85rem;font-family:JetBrains Mono,monospace;'>"
+                f"Entered: {exp_curr} {entered_total:,.2f} / {exp_curr} {amount:,.2f}</span>",
+                unsafe_allow_html=True
             )
-        entered_total = sum(amount_inputs.values())
-        ok    = abs(entered_total - amount) < 0.01
-        color = "#00D4AA" if ok else "#F06090"
-        st.markdown(
-            f"<span style='color:{color};font-size:0.85rem;font-family:JetBrains Mono,monospace;'>"
-            f"Entered: {exp_curr} {entered_total:,.2f} / {exp_curr} {amount:,.2f}</span>",
-            unsafe_allow_html=True
-        )
 
-    if st.button("💾 Save Expense", use_container_width=True, key="btn_save_expense"):
-        err = None
-        if not desc.strip():      err = "Enter a description."
-        elif amount <= 0:         err = "Amount must be greater than zero."
-        elif not split_between:   err = "Select at least one person to split with."
-        elif split_mode == "Unequal Split" and abs(sum(amount_inputs.values()) - amount) > 0.01:
-            err = f"Shares sum to {sum(amount_inputs.values()):.2f} but total is {amount:.2f}. Please fix."
+        if st.button("💾 Save Expense", use_container_width=True, key="btn_save_expense"):
+            err = None
+            if not desc.strip():      err = "Enter a description."
+            elif amount <= 0:         err = "Amount must be greater than zero."
+            elif not split_between:   err = "Select at least one person to split with."
+            elif split_mode == "Unequal Split" and abs(sum(amount_inputs.values()) - amount) > 0.01:
+                err = f"Shares sum to {sum(amount_inputs.values()):.2f} but total is {amount:.2f}. Please fix."
 
-        if err:
-            st.error(err)
-        else:
-            now = datetime.now().isoformat()
-            if split_mode == "Equal Split":
-                share_orig = amount / len(split_between)
-                share_base = to_base(share_orig, exp_curr, currencies_map, base_currency)
-                for person in split_between:
-                    cursor.execute("""
-                        INSERT INTO expenses(group_id,date,description,category,paid_by,person,
-                            amount_original,currency,amount_base,created_at)
-                        VALUES(?,?,?,?,?,?,?,?,?,?)
-                    """, (group_id, str(exp_date), desc.strip(), category,
-                          payer, person, share_orig, exp_curr, share_base, now))
+            if err:
+                st.error(err)
             else:
-                for person, val in amount_inputs.items():
-                    base_val = to_base(val, exp_curr, currencies_map, base_currency)
-                    cursor.execute("""
-                        INSERT INTO expenses(group_id,date,description,category,paid_by,person,
-                            amount_original,currency,amount_base,created_at)
-                        VALUES(?,?,?,?,?,?,?,?,?,?)
-                    """, (group_id, str(exp_date), desc.strip(), category,
-                          payer, person, val, exp_curr, base_val, now))
-            conn.commit()
-            st.success(f"✅ '{desc}' added successfully!")
-            st.rerun()
+                now = datetime.now().isoformat()
+                if split_mode == "Equal Split":
+                    share_orig = amount / len(split_between)
+                    share_base = to_base(share_orig, exp_curr, currencies_map, base_currency)
+                    for person in split_between:
+                        cursor.execute("""
+                            INSERT INTO expenses(group_id,date,description,category,paid_by,person,
+                                amount_original,currency,amount_base,created_at)
+                            VALUES(?,?,?,?,?,?,?,?,?,?)
+                        """, (group_id, str(exp_date), desc.strip(), category,
+                              payer, person, share_orig, exp_curr, share_base, now))
+                else:
+                    for person, val in amount_inputs.items():
+                        base_val = to_base(val, exp_curr, currencies_map, base_currency)
+                        cursor.execute("""
+                            INSERT INTO expenses(group_id,date,description,category,paid_by,person,
+                                amount_original,currency,amount_base,created_at)
+                            VALUES(?,?,?,?,?,?,?,?,?,?)
+                        """, (group_id, str(exp_date), desc.strip(), category,
+                              payer, person, val, exp_curr, base_val, now))
+                conn.commit()
+                st.success(f"✅ '{desc}' added successfully!")
+                st.rerun()
 
 # ══════════════════════════════════════════════
 # TAB 3 — MANAGE
