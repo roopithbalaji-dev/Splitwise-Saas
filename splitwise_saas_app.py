@@ -1,471 +1,887 @@
+"""
+Splitwise Pro — Enterprise Expense Splitter
+Premium dark UI · Multi-currency · JSON Save/Load · Analytics
+Run with: streamlit run splitwise_pro.py
+"""
+
 import streamlit as st
 import pandas as pd
 import sqlite3
 import plotly.express as px
 from io import BytesIO
 from datetime import datetime
+import json
 
-st.set_page_config(page_title="Splitwise SaaS", layout="wide")
+# ─────────────────────────────────────────────
+# PAGE CONFIG
+# ─────────────────────────────────────────────
 
-# -----------------------
-# DARK THEME
-# -----------------------
+st.set_page_config(
+    page_title="Splitwise Pro",
+    layout="wide",
+    page_icon="💸",
+    initial_sidebar_state="expanded",
+)
+
+# ─────────────────────────────────────────────
+# PREMIUM DARK CSS
+# ─────────────────────────────────────────────
 
 st.markdown("""
 <style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
-body {background-color:#0E1117;color:white;}
+html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
+.stApp { background: #080C12; color: #D4DCE8; }
 
-[data-testid="stMetric"] {
-background:#1F2937;
-padding:15px;
-border-radius:10px;
+[data-testid="stSidebar"] {
+    background: #0D1219;
+    border-right: 1px solid #1C2535;
 }
 
+/* Tabs */
+.stTabs [data-baseweb="tab-list"] {
+    background: #0D1219;
+    border: 1px solid #1C2535;
+    border-radius: 12px;
+    padding: 5px;
+    gap: 4px;
+}
+.stTabs [data-baseweb="tab"] {
+    background: transparent;
+    color: #5A7090;
+    border-radius: 9px;
+    font-weight: 500;
+    font-size: 0.88rem;
+    padding: 8px 18px;
+    transition: all 0.2s ease;
+}
+.stTabs [aria-selected="true"] {
+    background: linear-gradient(135deg, #1A4FAA 0%, #0E3A80 100%) !important;
+    color: #EBF0FF !important;
+    box-shadow: 0 2px 12px rgba(26,79,170,0.4);
+}
+
+/* KPI Cards */
+[data-testid="stMetric"] {
+    background: linear-gradient(145deg, #0F1A28 0%, #0A1020 100%);
+    border: 1px solid #1C2F48;
+    border-radius: 14px;
+    padding: 18px 20px;
+    position: relative;
+    overflow: hidden;
+}
+[data-testid="stMetric"]::before {
+    content: "";
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, #1A4FAA, #00D4AA);
+}
+[data-testid="stMetricLabel"] { color: #5A7090 !important; font-size: 0.75rem !important; text-transform: uppercase; letter-spacing: 0.08em; }
+[data-testid="stMetricValue"] { color: #E8F0FF !important; font-size: 1.5rem !important; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
+
+/* Buttons */
+.stButton > button {
+    background: linear-gradient(135deg, #1A4FAA 0%, #0E3A80 100%);
+    color: #EBF0FF;
+    border: none;
+    border-radius: 9px;
+    font-weight: 600;
+    font-size: 0.875rem;
+    padding: 10px 22px;
+    transition: all 0.2s ease;
+    box-shadow: 0 2px 8px rgba(26,79,170,0.3);
+}
+.stButton > button:hover {
+    background: linear-gradient(135deg, #1E5CC4 0%, #1244A0 100%);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 16px rgba(26,79,170,0.45);
+}
+
+/* Inputs */
+[data-testid="stTextInput"] input,
+[data-testid="stNumberInput"] input {
+    background: #0D1826 !important;
+    border: 1px solid #1C2F48 !important;
+    border-radius: 9px !important;
+    color: #D4DCE8 !important;
+    font-family: 'DM Sans', sans-serif !important;
+}
+
+/* Selectbox */
+[data-baseweb="select"] > div {
+    background: #0D1826 !important;
+    border: 1px solid #1C2F48 !important;
+    border-radius: 9px !important;
+    color: #D4DCE8 !important;
+}
+
+/* Dataframe */
+[data-testid="stDataFrame"] { border: 1px solid #1C2F48; border-radius: 12px; overflow: hidden; }
+
+/* Expander */
+[data-testid="stExpander"] { background: #0D1219; border: 1px solid #1C2535; border-radius: 12px; }
+
+/* Divider */
+hr { border-color: #1C2535; margin: 20px 0; }
+
+/* Multiselect tags */
+[data-baseweb="tag"] { background: #0D2244 !important; border-color: #1A4FAA !important; color: #5B9CF6 !important; border-radius: 6px !important; }
+
+/* File uploader */
+[data-testid="stFileUploader"] { background: #0D1826; border: 1px dashed #1C2F48; border-radius: 10px; padding: 8px; }
+
+/* Custom components */
+.app-header {
+    display: flex; align-items: center; gap: 16px;
+    padding: 24px 0 8px;
+    border-bottom: 1px solid #1C2535;
+    margin-bottom: 24px;
+}
+.app-header h1 {
+    margin: 0; font-size: 1.9rem; font-weight: 700;
+    background: linear-gradient(135deg, #5B9CF6 0%, #00D4AA 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+}
+.pill {
+    background: #0D2244; color: #5B9CF6;
+    border: 1px solid #1A4FAA;
+    padding: 3px 12px; border-radius: 20px;
+    font-size: 0.78rem; font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+    display: inline-block;
+}
+.pill-green { background: #072218; color: #00D4AA; border-color: #0A5540; }
+.pill-amber { background: #1E1400; color: #F0A500; border-color: #5A3A00; }
+
+.section-label {
+    font-size: 0.72rem; font-weight: 600; color: #4A6080;
+    text-transform: uppercase; letter-spacing: 0.12em;
+    margin-bottom: 12px; margin-top: 24px;
+}
+.sidebar-section {
+    font-size: 0.68rem; font-weight: 700; color: #2E4060;
+    text-transform: uppercase; letter-spacing: 0.14em;
+    padding: 12px 0 6px;
+}
+
+.settlement-row {
+    display: flex; align-items: center; justify-content: space-between;
+    background: linear-gradient(135deg, #0A1E38 0%, #060F1C 100%);
+    border: 1px solid #1C3560;
+    border-radius: 10px;
+    padding: 14px 20px; margin: 6px 0;
+}
+.settle-arrow { color: #5B9CF6; font-size: 1.2rem; }
+.settle-amount { font-family: 'JetBrains Mono', monospace; color: #00D4AA; font-weight: 700; font-size: 1rem; }
+.settle-name { color: #C0CCD8; font-weight: 600; }
+
+.member-row {
+    display: flex; align-items: center; justify-content: space-between;
+    background: #0A1420; border: 1px solid #1C2F48;
+    border-radius: 9px; padding: 10px 16px; margin: 5px 0;
+}
+.conv-info {
+    background: linear-gradient(135deg, #071428 0%, #040C1A 100%);
+    border: 1px solid #1A3060; border-radius: 10px;
+    padding: 12px 18px; margin: 10px 0;
+    display: flex; align-items: center; gap: 10px;
+    font-size: 0.875rem;
+}
+.conv-info span { color: #5A7090; }
+.conv-info strong { color: #5B9CF6; font-family: 'JetBrains Mono', monospace; }
+.empty-state { text-align: center; padding: 48px 24px; color: #3A5070; }
+.empty-state .emoji { font-size: 2.5rem; margin-bottom: 12px; }
 </style>
 """, unsafe_allow_html=True)
 
-# -----------------------
-# DATABASE
-# -----------------------
+# ─────────────────────────────────────────────
+# DATABASE INIT
+# ─────────────────────────────────────────────
 
-conn = sqlite3.connect("splitwise_saas.db", check_same_thread=False)
+@st.cache_resource
+def init_db():
+    c = sqlite3.connect("splitwise_pro.db", check_same_thread=False)
+    c.executescript("""
+        CREATE TABLE IF NOT EXISTS groups (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            name          TEXT UNIQUE NOT NULL,
+            base_currency TEXT NOT NULL DEFAULT 'EUR',
+            created_at    TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS currencies (
+            id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL,
+            code     TEXT NOT NULL,
+            rate     REAL NOT NULL DEFAULT 1.0,
+            UNIQUE(group_id, code)
+        );
+        CREATE TABLE IF NOT EXISTS members (
+            id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id INTEGER NOT NULL,
+            name     TEXT NOT NULL,
+            UNIQUE(group_id, name)
+        );
+        CREATE TABLE IF NOT EXISTS expenses (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id        INTEGER NOT NULL,
+            date            TEXT NOT NULL,
+            description     TEXT NOT NULL,
+            category        TEXT,
+            paid_by         TEXT NOT NULL,
+            person          TEXT NOT NULL,
+            amount_original REAL NOT NULL,
+            currency        TEXT NOT NULL,
+            amount_base     REAL NOT NULL,
+            created_at      TEXT NOT NULL
+        );
+    """)
+    c.commit()
+    return c
+
+conn   = init_db()
 cursor = conn.cursor()
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS users(
-id INTEGER PRIMARY KEY,
-username TEXT,
-password TEXT
-)
-""")
+# ─────────────────────────────────────────────
+# CONSTANTS
+# ─────────────────────────────────────────────
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS groups(
-id INTEGER PRIMARY KEY,
-name TEXT
-)
-""")
+CATEGORIES = [
+    "🍽️ Food & Dining", "🏨 Accommodation", "✈️ Transport",
+    "🎭 Entertainment", "🛒 Shopping", "⚕️ Health",
+    "📱 Utilities", "🎒 Activities", "💡 Miscellaneous",
+]
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS expenses(
-id INTEGER PRIMARY KEY,
-group_id INTEGER,
-date TEXT,
-description TEXT,
-paid_by TEXT,
-person TEXT,
-amount REAL
-)
-""")
+COMMON_CURRENCIES = [
+    "EUR", "USD", "GBP", "INR", "JPY", "AED", "SGD",
+    "CHF", "AUD", "CAD", "THB", "MYR", "IDR", "KRW", "HKD",
+]
 
-conn.commit()
+PALETTE = ["#5B9CF6", "#00D4AA", "#F0A500", "#F06090", "#9B72FF", "#FF7A50", "#50C8FF"]
+PLOTLY_THEME = dict(template="plotly_dark", paper_bgcolor="#0D1219", plot_bgcolor="#0D1219", font_color="#8AA0BC")
 
-# -----------------------
-# LOGIN
-# -----------------------
+# ─────────────────────────────────────────────
+# DATA HELPERS
+# ─────────────────────────────────────────────
 
-if "user" not in st.session_state:
-    st.session_state.user = None
+def get_groups():
+    return cursor.execute("SELECT id,name,base_currency FROM groups ORDER BY created_at DESC").fetchall()
 
-st.title("💳 ಸ್ನೇಹಹಂಚಿಕೆ(Splitwise)")
+def get_currencies(group_id: int) -> dict:
+    rows = cursor.execute("SELECT code,rate FROM currencies WHERE group_id=?", (group_id,)).fetchall()
+    return {r[0]: r[1] for r in rows}
 
-if st.session_state.user is None:
+def get_members(group_id: int) -> list:
+    rows = cursor.execute("SELECT name FROM members WHERE group_id=? ORDER BY name", (group_id,)).fetchall()
+    return [r[0] for r in rows]
 
-    tab1,tab2 = st.tabs(["Login","Register"])
-
-    with tab1:
-
-        u = st.text_input("Username")
-        p = st.text_input("Password",type="password")
-
-        if st.button("Login"):
-
-            user = cursor.execute(
-            "SELECT * FROM users WHERE username=? AND password=?",
-            (u,p)).fetchone()
-
-            if user:
-                st.session_state.user = u
-                st.rerun()
-            else:
-                st.error("Invalid login")
-
-    with tab2:
-
-        new_u = st.text_input("New Username")
-        new_p = st.text_input("New Password",type="password")
-
-        if st.button("Create Account"):
-
-            cursor.execute(
-            "INSERT INTO users(username,password) VALUES(?,?)",
-            (new_u,new_p)
-            )
-
-            conn.commit()
-
-            st.success("Account created")
-
-    st.stop()
-
-# -----------------------
-# GROUPS
-# -----------------------
-
-st.sidebar.header("Groups")
-
-groups = cursor.execute("SELECT * FROM groups").fetchall()
-
-group_names = [g[1] for g in groups]
-
-new_group = st.sidebar.text_input("Create Group")
-
-if st.sidebar.button("Add Group"):
-
-    cursor.execute(
-    "INSERT INTO groups(name) VALUES(?)",
-    (new_group,)
+def get_expenses(group_id: int) -> pd.DataFrame:
+    return pd.read_sql_query(
+        "SELECT * FROM expenses WHERE group_id=? ORDER BY date DESC, id DESC",
+        conn, params=(group_id,)
     )
 
-    conn.commit()
-    st.rerun()
+def to_base(amount: float, currency: str, currencies: dict, base: str) -> float:
+    """Convert foreign amount → base.  Rate definition: 1 base = X foreign."""
+    if currency == base:
+        return amount
+    rate = currencies.get(currency, 1.0)
+    return amount / rate if rate else amount
 
-if len(group_names) == 0:
-    st.warning("Create a group first")
-    st.stop()
+def compute_balances(df: pd.DataFrame, members: list) -> dict:
+    bal = {m: 0.0 for m in members}
+    for _, r in df.iterrows():
+        if r["paid_by"] in bal:
+            bal[r["paid_by"]] += r["amount_base"]
+        if r["person"] in bal:
+            bal[r["person"]] -= r["amount_base"]
+    return {k: round(v, 2) for k, v in bal.items()}
 
-group_selected = st.sidebar.selectbox("Select Group",group_names)
+def compute_settlements(balance: dict) -> list:
+    creditors = sorted([[p, b]  for p, b in balance.items() if b > 0.005],  key=lambda x: -x[1])
+    debtors   = sorted([[p, -b] for p, b in balance.items() if b < -0.005], key=lambda x: -x[1])
+    result = []
+    for d in debtors:
+        for c in creditors:
+            if d[1] < 0.005: break
+            pay = min(d[1], c[1])
+            if pay > 0.005:
+                result.append((d[0], c[0], round(pay, 2)))
+                d[1] -= pay
+                c[1] -= pay
+    return result
 
-group_id = cursor.execute(
-"SELECT id FROM groups WHERE name=?",
-(group_selected,)
-).fetchone()[0]
+# ─────────────────────────────────────────────
+# SIDEBAR
+# ─────────────────────────────────────────────
 
-# -----------------------
-# FRIENDS
-# -----------------------
+with st.sidebar:
+    st.markdown('<div style="padding:16px 0 4px;"><h2 style="margin:0;font-size:1.3rem;background:linear-gradient(135deg,#5B9CF6,#00D4AA);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">💸 Splitwise Pro</h2></div>', unsafe_allow_html=True)
 
-friends_input = st.sidebar.text_input(
-"Friends",
-"Balaji,Shashikant,Arun"
-)
+    # ── Create Trip ──
+    st.markdown('<div class="sidebar-section">New Trip / Project</div>', unsafe_allow_html=True)
+    with st.expander("➕ Create Trip", expanded=False):
+        trip_name     = st.text_input("Trip / Project Name", placeholder="e.g. Tokyo 2025", key="new_trip_name")
+        base_curr_sel = st.selectbox("Base Currency", COMMON_CURRENCIES, key="new_base_curr")
+        if st.button("Create Trip", use_container_width=True, key="btn_create"):
+            if trip_name.strip():
+                try:
+                    cursor.execute(
+                        "INSERT INTO groups(name,base_currency,created_at) VALUES(?,?,?)",
+                        (trip_name.strip(), base_curr_sel, datetime.now().isoformat())
+                    )
+                    gid = cursor.lastrowid
+                    cursor.execute(
+                        "INSERT OR IGNORE INTO currencies(group_id,code,rate) VALUES(?,?,?)",
+                        (gid, base_curr_sel, 1.0)
+                    )
+                    conn.commit()
+                    st.success(f"'{trip_name}' created!")
+                    st.rerun()
+                except sqlite3.IntegrityError:
+                    st.error("A trip with this name already exists.")
+            else:
+                st.error("Enter a trip name.")
 
-friends = [f.strip() for f in friends_input.split(",")]
+    # ── Select Trip ──
+    st.markdown('<div class="sidebar-section">Active Trip</div>', unsafe_allow_html=True)
+    groups = get_groups()
+    if not groups:
+        st.info("Create a trip above to get started.")
+        st.stop()
 
-# -----------------------
-# ADD EXPENSE
-# -----------------------
+    group_map     = {g[1]: (g[0], g[2]) for g in groups}
+    selected_name = st.selectbox("", list(group_map.keys()), label_visibility="collapsed", key="sel_group")
+    group_id, base_currency = group_map[selected_name]
+    st.markdown(f'Base currency: <span class="pill">{base_currency}</span>', unsafe_allow_html=True)
 
-st.header("Add Expense")
-
-c1,c2,c3,c4 = st.columns(4)
-
-with c1:
-    desc = st.text_input("Description")
-
-with c2:
-    amount = st.number_input("Amount",min_value=0.0)
-
-with c3:
-    payer = st.selectbox("Paid By",friends)
-
-with c4:
-    date = st.date_input("Date")
-
-split_mode = st.radio(
-"Split Type",
-["Equal Split","Unequal Split"]
-)
-
-split = st.multiselect("Split Between",friends,default=friends)
-
-amount_inputs = {}
-
-if split_mode == "Unequal Split" and len(split) > 0:
-
-    st.subheader("Enter amount per person")
-
-    for person in split:
-        amount_inputs[person] = st.number_input(
-            f"{person}",
-            min_value=0.0,
-            key=f"amt_{person}"
-        )
-
-if st.button("Add Expense"):
-
-    if len(split) > 0:
-
-        # ----------------
-        # Equal split
-        # ----------------
-
-        if split_mode == "Equal Split":
-
-            share = amount / len(split)
-
-            for person in split:
-
-                cursor.execute("""
-                INSERT INTO expenses
-                (group_id,date,description,paid_by,person,amount)
-                VALUES(?,?,?,?,?,?)
-                """,(group_id,str(date),desc,payer,person,share))
-
-        # ----------------
-        # Unequal split
-        # ----------------
-
-        else:
-
-            total_entered = sum(amount_inputs.values())
-
-            if abs(total_entered - amount) > 0.01:
-                st.error("Entered amounts must equal total expense")
-                st.stop()
-
-            for person,val in amount_inputs.items():
-
-                cursor.execute("""
-                INSERT INTO expenses
-                (group_id,date,description,paid_by,person,amount)
-                VALUES(?,?,?,?,?,?)
-                """,(group_id,str(date),desc,payer,person,val))
-
-        conn.commit()
-
-        st.success("Expense saved")
-        st.rerun()
-
-# -----------------------
-# LOAD DATA
-# -----------------------
-
-df = pd.read_sql_query(
-f"SELECT * FROM expenses WHERE group_id={group_id}",
-conn)
-
-# -----------------------
-# KPI DASHBOARD
-# -----------------------
-
-st.header("Dashboard")
-
-k1,k2,k3,k4 = st.columns(4)
-
-if not df.empty:
-
-    total = df["amount"].sum()
-    transactions = len(df)
-    avg = df["amount"].mean()
-    top = df.groupby("paid_by")["amount"].sum().idxmax()
-
-else:
-
-    total=0
-    transactions=0
-    avg=0
-    top="-"
-
-k1.metric("Total Spent",f"€{round(total,2)}")
-k2.metric("Transactions",transactions)
-k3.metric("Average Expense",f"€{round(avg,2)}")
-k4.metric("Top Spender",top)
-
-# -----------------------
-# EXPENSE LOG
-# -----------------------
-
-st.header("Expense Log")
-
-if not df.empty:
-    st.dataframe(df)
-
-# -----------------------
-# EDIT / DELETE
-# -----------------------
-
-st.subheader("Edit or Delete Expense")
-
-if not df.empty:
-
-    expense_id = st.selectbox("Expense ID",df["id"])
-
-    selected = df[df["id"]==expense_id].iloc[0]
-
-    c1,c2,c3,c4 = st.columns(4)
-
-    with c1:
-        new_desc = st.text_input(
-    "Description",
-    selected["description"],
-    key=f"edit_desc_{expense_id}"
-)
-
-    with c2:
-        new_amount = st.number_input(
-    "Amount",
-    value=float(selected["amount"]),
-    key=f"edit_amount_{expense_id}"
-)
-
-    with c3:
-        new_payer = st.selectbox(
-    "Paid By",
-    friends,
-    index=friends.index(selected["paid_by"]),
-    key=f"edit_payer_{expense_id}"
-)
-
-    with c4:
-        new_date = st.date_input(
-    "Date",
-    pd.to_datetime(selected["date"]),
-    key=f"edit_date_{expense_id}"
-)
-
-    col1,col2 = st.columns(2)
-
-    with col1:
-
-        if st.button("Update Expense"):
-
-            cursor.execute("""
-            UPDATE expenses
-            SET description=?,paid_by=?,amount=?,date=?
-            WHERE id=?
-            """,(new_desc,new_payer,new_amount,str(new_date),expense_id))
-
+    # ── Delete Trip ──
+    with st.expander("🗑️ Delete This Trip", expanded=False):
+        st.warning("Permanently deletes all data for this trip.")
+        if st.button("Confirm Delete", use_container_width=True, key="btn_del_trip"):
+            for tbl in ("expenses", "members", "currencies"):
+                cursor.execute(f"DELETE FROM {tbl} WHERE group_id=?", (group_id,))
+            cursor.execute("DELETE FROM groups WHERE id=?", (group_id,))
             conn.commit()
-            st.success("Updated")
             st.rerun()
 
-    with col2:
+    # ── Save / Load ──
+    st.markdown('<div class="sidebar-section">Save & Restore</div>', unsafe_allow_html=True)
 
-        if st.button("Delete Expense"):
-
-            cursor.execute(
-            "DELETE FROM expenses WHERE id=?",
-            (expense_id,)
-            )
-
-            conn.commit()
-            st.success("Deleted")
-            st.rerun()
-
-# -----------------------
-# BALANCES
-# -----------------------
-
-balance = {f:0 for f in friends}
-
-for _,r in df.iterrows():
-
-    balance[r["paid_by"]] += r["amount"]
-    balance[r["person"]] -= r["amount"]
-
-balance_df = pd.DataFrame(
-list(balance.items()),
-columns=["Friend","Balance"]
-)
-
-st.header("Balances")
-
-st.dataframe(balance_df)
-
-# -----------------------
-# ANALYTICS
-# -----------------------
-
-if not df.empty:
-
-    st.header("Analytics")
-
-    col1,col2 = st.columns(2)
-
-    spend = df.groupby("paid_by")["amount"].sum().reset_index()
-
-    with col1:
-
-        fig = px.bar(
-        spend,
-        x="paid_by",
-        y="amount",
-        color="paid_by",
-        title="Spending by Person"
-        )
-
-        st.plotly_chart(fig)
-
-    with col2:
-
-        fig2 = px.pie(
-        spend,
-        values="amount",
-        names="paid_by",
-        title="Expense Distribution"
-        )
-
-        st.plotly_chart(fig2)
-
-# -----------------------
-# SETTLEMENT ENGINE
-# -----------------------
-
-st.header("Settlement Suggestions")
-
-creditors=[]
-debtors=[]
-
-for p,b in balance.items():
-
-    if b>0:
-        creditors.append([p,b])
-    elif b<0:
-        debtors.append([p,-b])
-
-for d in debtors:
-
-    for c in creditors:
-
-        if d[1]==0:
-            break
-
-        pay=min(d[1],c[1])
-
-        if pay>0:
-
-            st.write(f"{d[0]} pays {c[0]} €{round(pay,2)}")
-
-            d[1]-=pay
-            c[1]-=pay
-
-# -----------------------
-# EXPORT EXCEL
-# -----------------------
-
-st.header("Export")
-
-def export_excel(data):
-
-    output=BytesIO()
-
-    with pd.ExcelWriter(output,engine="openpyxl") as writer:
-        data.to_excel(writer,index=False)
-
-    return output.getvalue()
-
-if not df.empty:
-
-    excel=export_excel(df)
+    def build_json_export() -> str:
+        return json.dumps({
+            "meta":      {"exported_at": datetime.now().isoformat(), "app": "Splitwise Pro"},
+            "group":     {"name": selected_name, "base_currency": base_currency},
+            "currencies": [{"code": c, "rate": r} for c, r in get_currencies(group_id).items()],
+            "members":   get_members(group_id),
+            "expenses":  [] if get_expenses(group_id).empty else get_expenses(group_id).to_dict(orient="records"),
+        }, indent=2, default=str)
 
     st.download_button(
-    "Download Excel",
-    excel,
-    "expenses.xlsx"
-
+        "📥 Save Session (JSON)",
+        data=build_json_export(),
+        file_name=f"{selected_name.replace(' ','_')}_splitwise.json",
+        mime="application/json",
+        use_container_width=True,
+        key="btn_save_json",
     )
 
+    uploaded = st.file_uploader("📤 Load Session", type=["json"], key="json_upload")
+    if uploaded:
+        try:
+            data = json.load(uploaded)
+            grp  = data["group"]
+            cursor.execute(
+                "INSERT OR IGNORE INTO groups(name,base_currency,created_at) VALUES(?,?,?)",
+                (grp["name"], grp["base_currency"], datetime.now().isoformat())
+            )
+            conn.commit()
+            ngid = cursor.execute("SELECT id FROM groups WHERE name=?", (grp["name"],)).fetchone()[0]
+            for c in data.get("currencies", []):
+                cursor.execute("INSERT OR REPLACE INTO currencies(group_id,code,rate) VALUES(?,?,?)", (ngid, c["code"], c["rate"]))
+            for m in data.get("members", []):
+                cursor.execute("INSERT OR IGNORE INTO members(group_id,name) VALUES(?,?)", (ngid, m))
+            cursor.execute("DELETE FROM expenses WHERE group_id=?", (ngid,))
+            for e in data.get("expenses", []):
+                cursor.execute("""
+                    INSERT INTO expenses(group_id,date,description,category,paid_by,person,
+                        amount_original,currency,amount_base,created_at)
+                    VALUES(?,?,?,?,?,?,?,?,?,?)
+                """, (ngid, e.get("date"), e.get("description"), e.get("category"),
+                      e.get("paid_by"), e.get("person"), e.get("amount_original"),
+                      e.get("currency"), e.get("amount_base"),
+                      e.get("created_at", datetime.now().isoformat())))
+            conn.commit()
+            st.success(f"Loaded '{grp['name']}'!")
+            st.rerun()
+        except Exception as ex:
+            st.error(f"Load failed: {ex}")
 
+# ─────────────────────────────────────────────
+# MAIN — LOAD DATA + HEADER
+# ─────────────────────────────────────────────
 
+members        = get_members(group_id)
+currencies_map = get_currencies(group_id)
+df             = get_expenses(group_id)
+n_members      = len(members)
+n_expenses     = df["description"].nunique() if not df.empty else 0
+total_spent    = df["amount_base"].sum() if not df.empty else 0.0
+
+st.markdown(f"""
+<div class="app-header">
+    <div style="flex:1">
+        <h1>💸 {selected_name}</h1>
+        <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap;">
+            <span class="pill">Base: {base_currency}</span>
+            <span class="pill-green">{n_members} Members</span>
+            <span class="pill-amber">{n_expenses} Expenses</span>
+        </div>
+    </div>
+    <div style="font-family:'JetBrains Mono',monospace;font-size:1.7rem;font-weight:700;
+         background:linear-gradient(135deg,#5B9CF6,#00D4AA);
+         -webkit-background-clip:text;-webkit-text-fill-color:transparent;white-space:nowrap;">
+        {base_currency} {total_spent:,.2f}
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────
+# TABS
+# ─────────────────────────────────────────────
+
+tab_overview, tab_add, tab_manage, tab_analytics, tab_export = st.tabs([
+    "📊  Overview", "➕  Add Expense", "⚙️  Manage", "📈  Analytics", "📤  Export",
+])
+
+# ══════════════════════════════════════════════
+# TAB 1 — OVERVIEW
+# ══════════════════════════════════════════════
+
+with tab_overview:
+
+    if not df.empty:
+        avg_exp     = df.groupby("description")["amount_base"].sum().mean()
+        top_spender = df.groupby("paid_by")["amount_base"].sum().idxmax()
+        top_cat     = df.groupby("category")["amount_base"].sum().idxmax() if "category" in df.columns else "—"
+        per_head    = total_spent / n_members if n_members else 0.0
+    else:
+        avg_exp = per_head = 0.0
+        top_spender = top_cat = "—"
+
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.metric(f"Total ({base_currency})",    f"{total_spent:,.2f}")
+    k2.metric("Unique Expenses",             n_expenses)
+    k3.metric(f"Per Head ({base_currency})", f"{per_head:,.2f}")
+    k4.metric("Top Spender",                 top_spender)
+    k5.metric("Top Category",                top_cat.split()[-1] if top_cat != "—" else "—")
+
+    st.markdown("---")
+    col_bal, col_settle = st.columns(2, gap="large")
+
+    # Balances
+    with col_bal:
+        st.markdown('<div class="section-label">💰 Balances</div>', unsafe_allow_html=True)
+        if members and not df.empty:
+            balance = compute_balances(df, members)
+            for person, bal in sorted(balance.items(), key=lambda x: -x[1]):
+                color  = "#00D4AA" if bal >= 0 else "#F06090"
+                symbol = "▲" if bal >= 0 else "▼"
+                label  = "gets back" if bal >= 0 else "owes"
+                st.markdown(f"""
+                <div class="member-row">
+                    <span style="color:#C0CCD8;font-weight:600;">👤 {person}</span>
+                    <span style="color:{color};font-family:'JetBrains Mono',monospace;font-weight:700;">
+                        {symbol} {base_currency} {abs(bal):,.2f}
+                        <span style="font-size:0.7rem;font-weight:400;color:#5A7090;"> {label}</span>
+                    </span>
+                </div>
+                """, unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="empty-state"><div class="emoji">💳</div><p>Add members &amp; expenses<br>to see balances.</p></div>', unsafe_allow_html=True)
+
+    # Settlements
+    with col_settle:
+        st.markdown('<div class="section-label">🔄 Settlement Suggestions</div>', unsafe_allow_html=True)
+        if members and not df.empty:
+            balance     = compute_balances(df, members)
+            settlements = compute_settlements(balance)
+            if settlements:
+                for debtor, creditor, amt in settlements:
+                    st.markdown(f"""
+                    <div class="settlement-row">
+                        <span class="settle-name">👤 {debtor}</span>
+                        <span class="settle-arrow">→</span>
+                        <span class="settle-name">👤 {creditor}</span>
+                        <span class="settle-amount">{base_currency} {amt:,.2f}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                st.success("✅ Everyone is settled up!")
+        else:
+            st.markdown('<div class="empty-state"><div class="emoji">🤝</div><p>Settlements appear<br>once expenses are logged.</p></div>', unsafe_allow_html=True)
+
+    st.markdown("---")
+    st.markdown('<div class="section-label">📋 Expense Log</div>', unsafe_allow_html=True)
+    if not df.empty:
+        display = df[["date","description","category","paid_by","person","currency","amount_original","amount_base"]].copy()
+        display.columns = ["Date","Description","Category","Paid By","Person","Curr","Amount (Orig)",f"Amount ({base_currency})"]
+        display["Amount (Orig)"]                 = display["Amount (Orig)"].round(2)
+        display[f"Amount ({base_currency})"]     = display[f"Amount ({base_currency})"].round(2)
+        st.dataframe(display, use_container_width=True, hide_index=True, height=320)
+    else:
+        st.markdown('<div class="empty-state"><div class="emoji">📭</div><p>No expenses yet.<br>Head to <strong>Add Expense</strong> to get started.</p></div>', unsafe_allow_html=True)
+
+# ══════════════════════════════════════════════
+# TAB 2 — ADD EXPENSE
+# ══════════════════════════════════════════════
+
+with tab_add:
+
+    if not members:
+        st.warning("⚠️ Add members first in the **Manage** tab.")
+        st.stop()
+    if not currencies_map:
+        st.warning("⚠️ No currencies configured. Go to **Manage** tab.")
+        st.stop()
+
+    all_curr = list(currencies_map.keys())
+
+    st.markdown('<div class="section-label">Expense Details</div>', unsafe_allow_html=True)
+    c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
+    with c1:
+        desc     = st.text_input("Description", placeholder="Hotel Bali...", key="add_desc")
+    with c2:
+        exp_curr = st.selectbox("Currency", all_curr, key="add_curr")
+    with c3:
+        amount   = st.number_input("Amount", min_value=0.0, step=0.01, format="%.2f", key="add_amount")
+    with c4:
+        exp_date = st.date_input("Date", datetime.today(), key="add_date")
+
+    c5, c6 = st.columns(2)
+    with c5:
+        payer    = st.selectbox("Paid By", members, key="add_payer")
+    with c6:
+        category = st.selectbox("Category", CATEGORIES, key="add_cat")
+
+    # Live conversion preview
+    if exp_curr != base_currency and amount > 0:
+        rate       = currencies_map.get(exp_curr, 1.0)
+        base_equiv = to_base(amount, exp_curr, currencies_map, base_currency)
+        st.markdown(f"""
+        <div class="conv-info">
+            💱 <span>{exp_curr} {amount:,.2f}</span>
+            &nbsp;→&nbsp;
+            <strong>{base_currency} {base_equiv:,.2f}</strong>
+            <span style="margin-left:auto;font-size:0.78rem;color:#3A5070;">
+                1 {base_currency} = {rate} {exp_curr}
+            </span>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown('<div class="section-label">Split Configuration</div>', unsafe_allow_html=True)
+    split_mode    = st.radio("Split Type", ["Equal Split", "Unequal Split"], horizontal=True, key="add_split_mode")
+    split_between = st.multiselect("Split Between", members, default=members, key="add_split_between")
+
+    amount_inputs = {}
+    if split_mode == "Unequal Split" and split_between:
+        st.markdown("**Enter each person's share** (must total the expense amount):")
+        cols = st.columns(min(len(split_between), 4))
+        for i, person in enumerate(split_between):
+            amount_inputs[person] = cols[i % 4].number_input(
+                person, min_value=0.0, step=0.01, format="%.2f", key=f"unequal_{person}"
+            )
+        entered_total = sum(amount_inputs.values())
+        ok    = abs(entered_total - amount) < 0.01
+        color = "#00D4AA" if ok else "#F06090"
+        st.markdown(
+            f"<span style='color:{color};font-size:0.85rem;font-family:JetBrains Mono,monospace;'>"
+            f"Entered: {exp_curr} {entered_total:,.2f} / {exp_curr} {amount:,.2f}</span>",
+            unsafe_allow_html=True
+        )
+
+    if st.button("💾 Save Expense", use_container_width=True, key="btn_save_expense"):
+        err = None
+        if not desc.strip():      err = "Enter a description."
+        elif amount <= 0:         err = "Amount must be greater than zero."
+        elif not split_between:   err = "Select at least one person to split with."
+        elif split_mode == "Unequal Split" and abs(sum(amount_inputs.values()) - amount) > 0.01:
+            err = f"Shares sum to {sum(amount_inputs.values()):.2f} but total is {amount:.2f}. Please fix."
+
+        if err:
+            st.error(err)
+        else:
+            now = datetime.now().isoformat()
+            if split_mode == "Equal Split":
+                share_orig = amount / len(split_between)
+                share_base = to_base(share_orig, exp_curr, currencies_map, base_currency)
+                for person in split_between:
+                    cursor.execute("""
+                        INSERT INTO expenses(group_id,date,description,category,paid_by,person,
+                            amount_original,currency,amount_base,created_at)
+                        VALUES(?,?,?,?,?,?,?,?,?,?)
+                    """, (group_id, str(exp_date), desc.strip(), category,
+                          payer, person, share_orig, exp_curr, share_base, now))
+            else:
+                for person, val in amount_inputs.items():
+                    base_val = to_base(val, exp_curr, currencies_map, base_currency)
+                    cursor.execute("""
+                        INSERT INTO expenses(group_id,date,description,category,paid_by,person,
+                            amount_original,currency,amount_base,created_at)
+                        VALUES(?,?,?,?,?,?,?,?,?,?)
+                    """, (group_id, str(exp_date), desc.strip(), category,
+                          payer, person, val, exp_curr, base_val, now))
+            conn.commit()
+            st.success(f"✅ '{desc}' added successfully!")
+            st.rerun()
+
+# ══════════════════════════════════════════════
+# TAB 3 — MANAGE
+# ══════════════════════════════════════════════
+
+with tab_manage:
+
+    col_m, col_c = st.columns(2, gap="large")
+
+    # Members
+    with col_m:
+        st.markdown('<div class="section-label">👥 Members</div>', unsafe_allow_html=True)
+        nm = st.text_input("New Member Name", placeholder="e.g. Priya", key="mgmt_new_member")
+        if st.button("Add Member", use_container_width=True, key="btn_add_member"):
+            if nm.strip():
+                try:
+                    cursor.execute("INSERT OR IGNORE INTO members(group_id,name) VALUES(?,?)", (group_id, nm.strip()))
+                    conn.commit()
+                    st.success(f"Added {nm.strip()}")
+                    st.rerun()
+                except Exception as ex:
+                    st.error(str(ex))
+            else:
+                st.error("Enter a name.")
+
+        current_members = get_members(group_id)
+        if current_members:
+            for m in current_members:
+                mc1, mc2 = st.columns([4, 1])
+                mc1.markdown(f'<div style="padding:10px 0;color:#C0CCD8;">👤 {m}</div>', unsafe_allow_html=True)
+                if mc2.button("✕", key=f"rm_m_{m}"):
+                    cursor.execute("DELETE FROM members WHERE group_id=? AND name=?", (group_id, m))
+                    conn.commit()
+                    st.rerun()
+        else:
+            st.markdown('<div class="empty-state" style="padding:24px;"><p>No members yet.</p></div>', unsafe_allow_html=True)
+
+    # Currencies
+    with col_c:
+        st.markdown('<div class="section-label">💱 Currencies</div>', unsafe_allow_html=True)
+        st.markdown(f'Base: <span class="pill">{base_currency}</span> &nbsp; rate = 1.0 (fixed)', unsafe_allow_html=True)
+        st.markdown("")
+
+        available_curr = [c for c in COMMON_CURRENCIES if c != base_currency]
+        nc_code = st.selectbox("Add Currency", available_curr, key="mgmt_curr_code")
+        nc_rate = st.number_input(
+            f"Rate (1 {base_currency} = ? {nc_code})",
+            min_value=0.0001, value=1.0, step=0.01, format="%.4f",
+            key="mgmt_curr_rate"
+        )
+        if st.button("Add Currency", use_container_width=True, key="btn_add_curr"):
+            cursor.execute(
+                "INSERT OR REPLACE INTO currencies(group_id,code,rate) VALUES(?,?,?)",
+                (group_id, nc_code, nc_rate)
+            )
+            conn.commit()
+            st.success(f"{nc_code} added — 1 {base_currency} = {nc_rate} {nc_code}")
+            st.rerun()
+
+        current_curr = get_currencies(group_id)
+        for code, rate in current_curr.items():
+            if code == base_currency:
+                continue
+            cc1, cc2, cc3 = st.columns([1, 3, 1])
+            cc1.markdown(f'<span style="font-family:JetBrains Mono,monospace;color:#5B9CF6;font-weight:700;">{code}</span>', unsafe_allow_html=True)
+            cc2.markdown(f'<span style="color:#5A7090;font-size:0.82rem;">1 {base_currency} = {rate:,.4f} {code}</span>', unsafe_allow_html=True)
+            if cc3.button("✕", key=f"rm_c_{code}"):
+                cursor.execute("DELETE FROM currencies WHERE group_id=? AND code=?", (group_id, code))
+                conn.commit()
+                st.rerun()
+
+    st.markdown("---")
+
+    # Edit / Delete Expenses
+    st.markdown('<div class="section-label">✏️ Edit / Delete Expenses</div>', unsafe_allow_html=True)
+    df_edit = get_expenses(group_id)
+    if not df_edit.empty:
+        mgmt_members = get_members(group_id)
+        mgmt_currs   = get_currencies(group_id)
+        mgmt_cl      = list(mgmt_currs.keys())
+
+        options = df_edit.apply(
+            lambda r: f"#{int(r['id'])}  {r['date']}  |  {r['description']}  |  {r['paid_by']} → {r['person']}  |  {r['currency']} {float(r['amount_original']):,.2f}",
+            axis=1
+        ).tolist()
+
+        sel_idx = st.selectbox("Select Expense", range(len(options)), format_func=lambda i: options[i], key="edit_sel")
+        row     = df_edit.iloc[sel_idx]
+
+        ec1, ec2, ec3, ec4 = st.columns(4)
+        with ec1:
+            e_desc = st.text_input("Description", row["description"], key="e_desc")
+        with ec2:
+            e_amt  = st.number_input("Amount", value=float(row["amount_original"]), step=0.01, format="%.2f", key="e_amt")
+        with ec3:
+            e_pi   = mgmt_members.index(row["paid_by"]) if row["paid_by"] in mgmt_members else 0
+            e_payer = st.selectbox("Paid By", mgmt_members, index=e_pi, key="e_payer")
+        with ec4:
+            e_date  = st.date_input("Date", pd.to_datetime(row["date"]), key="e_date")
+
+        e_ci   = mgmt_cl.index(row["currency"]) if row["currency"] in mgmt_cl else 0
+        e_curr = st.selectbox("Currency", mgmt_cl, index=e_ci, key="e_curr")
+
+        eu1, eu2 = st.columns(2)
+        with eu1:
+            if st.button("✅ Update Expense", use_container_width=True, key="btn_update"):
+                new_base = to_base(e_amt, e_curr, mgmt_currs, base_currency)
+                cursor.execute("""
+                    UPDATE expenses SET description=?,paid_by=?,amount_original=?,
+                    currency=?,amount_base=?,date=? WHERE id=?
+                """, (e_desc, e_payer, e_amt, e_curr, new_base, str(e_date), int(row["id"])))
+                conn.commit()
+                st.success("Updated!")
+                st.rerun()
+        with eu2:
+            if st.button("🗑️ Delete Expense", use_container_width=True, key="btn_delete"):
+                cursor.execute("DELETE FROM expenses WHERE id=?", (int(row["id"]),))
+                conn.commit()
+                st.success("Deleted!")
+                st.rerun()
+    else:
+        st.info("No expenses to edit yet.")
+
+# ══════════════════════════════════════════════
+# TAB 4 — ANALYTICS
+# ══════════════════════════════════════════════
+
+with tab_analytics:
+
+    if df.empty:
+        st.markdown('<div class="empty-state"><div class="emoji">📊</div><p>No data yet.<br>Add expenses to unlock analytics.</p></div>', unsafe_allow_html=True)
+    else:
+        a1, a2 = st.columns(2)
+
+        spend_person = df.groupby("paid_by")["amount_base"].sum().reset_index()
+        spend_person.columns = ["Person", "Total"]
+
+        with a1:
+            fig = px.bar(spend_person, x="Person", y="Total", color="Person",
+                         title=f"Spending by Person ({base_currency})",
+                         color_discrete_sequence=PALETTE, **PLOTLY_THEME)
+            fig.update_layout(showlegend=False, margin=dict(t=40,b=20,l=10,r=10))
+            fig.update_traces(marker_line_width=0)
+            st.plotly_chart(fig, use_container_width=True)
+
+        with a2:
+            fig2 = px.pie(spend_person, values="Total", names="Person",
+                          title="Expense Share by Person",
+                          color_discrete_sequence=PALETTE, **PLOTLY_THEME, hole=0.45)
+            fig2.update_layout(margin=dict(t=40,b=20,l=10,r=10))
+            st.plotly_chart(fig2, use_container_width=True)
+
+        a3, a4 = st.columns(2)
+
+        if "category" in df.columns and df["category"].notna().any():
+            spend_cat = df.groupby("category")["amount_base"].sum().reset_index()
+            spend_cat.columns = ["Category", "Total"]
+            spend_cat = spend_cat.sort_values("Total", ascending=True)
+            with a3:
+                fig3 = px.bar(spend_cat, x="Total", y="Category", orientation="h",
+                              color="Category", title=f"Spending by Category ({base_currency})",
+                              color_discrete_sequence=PALETTE, **PLOTLY_THEME)
+                fig3.update_layout(showlegend=False, margin=dict(t=40,b=20,l=10,r=10))
+                fig3.update_traces(marker_line_width=0)
+                st.plotly_chart(fig3, use_container_width=True)
+
+        df_time = df.copy()
+        df_time["date"] = pd.to_datetime(df_time["date"])
+        time_agg = df_time.groupby("date")["amount_base"].sum().cumsum().reset_index()
+        time_agg.columns = ["Date", "Cumulative"]
+
+        with a4:
+            fig4 = px.area(time_agg, x="Date", y="Cumulative",
+                           title=f"Cumulative Spend ({base_currency})",
+                           **PLOTLY_THEME, color_discrete_sequence=["#5B9CF6"])
+            fig4.update_traces(fill="tozeroy", line_width=2)
+            fig4.update_layout(margin=dict(t=40,b=20,l=10,r=10))
+            st.plotly_chart(fig4, use_container_width=True)
+
+        # Per-person breakdown by category
+        st.markdown('<div class="section-label">Per-Person Category Breakdown</div>', unsafe_allow_html=True)
+        person_cat = df.groupby(["person","category"])["amount_base"].sum().reset_index()
+        person_cat.columns = ["Person","Category","Amount"]
+        fig5 = px.bar(person_cat, x="Person", y="Amount", color="Category",
+                      title=f"Expense Breakdown per Person ({base_currency})",
+                      color_discrete_sequence=PALETTE, barmode="stack", **PLOTLY_THEME)
+        fig5.update_layout(margin=dict(t=40,b=20,l=10,r=10))
+        st.plotly_chart(fig5, use_container_width=True)
+
+# ══════════════════════════════════════════════
+# TAB 5 — EXPORT
+# ══════════════════════════════════════════════
+
+with tab_export:
+
+    if df.empty:
+        st.info("No data to export. Add some expenses first.")
+    else:
+        st.markdown('<div class="section-label">Download Options</div>', unsafe_allow_html=True)
+
+        exp_members      = get_members(group_id)
+        balance_exp      = compute_balances(df, exp_members) if exp_members else {}
+        bal_df_exp       = pd.DataFrame([(k, round(v,2)) for k,v in balance_exp.items()],
+                                         columns=["Member", f"Balance ({base_currency})"])
+        settlements_exp  = compute_settlements(balance_exp)
+        settle_df_exp    = pd.DataFrame(settlements_exp,
+                                         columns=["Debtor","Creditor",f"Amount ({base_currency})"]
+                                        ) if settlements_exp else pd.DataFrame()
+
+        col_x1, col_x2 = st.columns(2)
+
+        with col_x1:
+            st.markdown("**📊 Excel Export**")
+            st.caption("Expenses · Balances · Settlements — three separate sheets.")
+
+            def make_excel():
+                buf = BytesIO()
+                with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+                    df.to_excel(writer, sheet_name="Expenses", index=False)
+                    bal_df_exp.to_excel(writer, sheet_name="Balances", index=False)
+                    if not settle_df_exp.empty:
+                        settle_df_exp.to_excel(writer, sheet_name="Settlements", index=False)
+                return buf.getvalue()
+
+            st.download_button(
+                "⬇️ Download Excel (.xlsx)",
+                data=make_excel(),
+                file_name=f"{selected_name.replace(' ','_')}_expenses.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+
+        with col_x2:
+            st.markdown("**📄 CSV Export**")
+            st.caption("Plain CSV of all expense rows for external tools.")
+            st.download_button(
+                "⬇️ Download CSV",
+                data=df.to_csv(index=False),
+                file_name=f"{selected_name.replace(' ','_')}_expenses.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+
+        st.markdown("---")
+        st.markdown('<div class="section-label">Preview: Balances</div>', unsafe_allow_html=True)
+        st.dataframe(bal_df_exp, use_container_width=True, hide_index=True)
+
+        if not settle_df_exp.empty:
+            st.markdown('<div class="section-label">Preview: Settlements</div>', unsafe_allow_html=True)
+            st.dataframe(settle_df_exp, use_container_width=True, hide_index=True)
