@@ -701,7 +701,7 @@ with tab_manage:
     # Members
     with col_m:
         st.markdown('<div class="section-label">👥 Members</div>', unsafe_allow_html=True)
-        nm = st.text_input("New Member Name", placeholder="e.g. Priya", key="mgmt_new_member")
+        nm = st.text_input("New Member Name", placeholder="e.g. Balaji", key="mgmt_new_member")
         if st.button("Add Member", use_container_width=True, key="btn_add_member"):
             if nm.strip():
                 try:
