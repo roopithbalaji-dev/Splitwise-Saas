@@ -775,32 +775,60 @@ with tab_manage:
         total_now    = float(eg_row["total_orig"])
         is_equal_now = all(abs(a - amounts_now[0]) < 0.01 for a in amounts_now) if amounts_now else True
 
+        # ── KEY SUFFIX: include eg_idx so every widget re-renders fresh
+        #    when a different expense is selected from the dropdown ──────
+        ks = f"_{eg_idx}"
+
+        # ── Preview card of currently selected expense ──────────────────
+        split_label = "Equal" if is_equal_now else "Unequal"
+        persons_str = ", ".join(persons_now)
+        st.markdown(f"""
+        <div style="background:linear-gradient(135deg,#0A1E38,#060F1C);border:1px solid #1C3560;
+             border-radius:12px;padding:16px 20px;margin:12px 0 20px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+                <div>
+                    <div style="color:#5A7090;font-size:0.7rem;text-transform:uppercase;letter-spacing:0.1em;">Selected Expense</div>
+                    <div style="color:#E8F0FF;font-size:1.05rem;font-weight:700;margin-top:4px;">{eg_row['description']}</div>
+                    <div style="color:#5A7090;font-size:0.82rem;margin-top:4px;">
+                        📅 {eg_row['date']} &nbsp;·&nbsp; 👤 Paid by <strong style="color:#A0B8D0;">{eg_row['paid_by']}</strong>
+                        &nbsp;·&nbsp; 🔀 {split_label} split among <strong style="color:#A0B8D0;">{persons_str}</strong>
+                    </div>
+                </div>
+                <div style="font-family:'JetBrains Mono',monospace;font-size:1.4rem;font-weight:700;
+                     background:linear-gradient(135deg,#5B9CF6,#00D4AA);
+                     -webkit-background-clip:text;-webkit-text-fill-color:transparent;">
+                    {eg_row['currency']} {total_now:,.2f}
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
         st.markdown('<div class="section-label">Edit Expense Details</div>', unsafe_allow_html=True)
 
         ec1, ec2, ec3, ec4 = st.columns([2, 1, 1, 1])
         with ec1:
-            e_desc = st.text_input("Description", eg_row["description"], key="e_desc")
+            e_desc = st.text_input("Description", value=eg_row["description"], key=f"e_desc{ks}")
         with ec2:
             e_ci   = mgmt_cl.index(eg_row["currency"]) if eg_row["currency"] in mgmt_cl else 0
-            e_curr = st.selectbox("Currency", mgmt_cl, index=e_ci, key="e_curr")
+            e_curr = st.selectbox("Currency", mgmt_cl, index=e_ci, key=f"e_curr{ks}")
         with ec3:
             e_amt  = st.number_input("Total Amount", value=total_now, min_value=0.0,
-                                     step=0.01, format="%.2f", key="e_amt")
+                                     step=0.01, format="%.2f", key=f"e_amt{ks}")
         with ec4:
-            e_date = st.date_input("Date", pd.to_datetime(eg_row["date"]), key="e_date")
+            e_date = st.date_input("Date", pd.to_datetime(eg_row["date"]), key=f"e_date{ks}")
 
         ec5, ec6 = st.columns(2)
         with ec5:
             e_pi    = mgmt_members.index(eg_row["paid_by"]) if eg_row["paid_by"] in mgmt_members else 0
-            e_payer = st.selectbox("Paid By", mgmt_members, index=e_pi, key="e_payer")
+            e_payer = st.selectbox("Paid By", mgmt_members, index=e_pi, key=f"e_payer{ks}")
         with ec6:
             cat_list = CATEGORIES
             e_cat_i  = cat_list.index(eg_row["category"]) if eg_row["category"] in cat_list else 0
-            e_cat    = st.selectbox("Category", cat_list, index=e_cat_i, key="e_cat")
+            e_cat    = st.selectbox("Category", cat_list, index=e_cat_i, key=f"e_cat{ks}")
 
         # Live conversion preview
         if e_curr != base_currency and e_amt > 0:
-            rate_e      = mgmt_currs.get(e_curr, 1.0)
+            rate_e       = mgmt_currs.get(e_curr, 1.0)
             base_equiv_e = to_base(e_amt, e_curr, mgmt_currs, base_currency)
             st.markdown(f"""
             <div class="conv-info">
@@ -815,25 +843,25 @@ with tab_manage:
 
         st.markdown('<div class="section-label">Edit Split Configuration</div>', unsafe_allow_html=True)
 
-        e_split_default = "Equal Split" if is_equal_now else "Unequal Split"
-        e_split_mode    = st.radio("Split Type", ["Equal Split", "Unequal Split"],
-                                   index=0 if is_equal_now else 1,
-                                   horizontal=True, key="e_split_mode")
+        e_split_mode = st.radio("Split Type", ["Equal Split", "Unequal Split"],
+                                index=0 if is_equal_now else 1,
+                                horizontal=True, key=f"e_split_mode{ks}")
 
-        valid_default = [p for p in persons_now if p in mgmt_members]
+        valid_default   = [p for p in persons_now if p in mgmt_members]
         e_split_between = st.multiselect("Split Between", mgmt_members,
                                          default=valid_default or mgmt_members,
-                                         key="e_split_between")
+                                         key=f"e_split_between{ks}")
 
         e_amount_inputs = {}
         if e_split_mode == "Unequal Split" and e_split_between:
-            st.markdown("**Enter each person's share:**")
-            ecols = st.columns(min(len(e_split_between), 4))
+            st.markdown("**Each person's share** (pre-filled from saved data):")
+            ecols         = st.columns(min(len(e_split_between), 4))
+            person_amt_map = dict(zip(persons_now, amounts_now))
             for i, person in enumerate(e_split_between):
-                default_share = dict(zip(persons_now, amounts_now)).get(person, 0.0)
+                saved_share = float(person_amt_map.get(person, 0.0))
                 e_amount_inputs[person] = ecols[i % 4].number_input(
-                    person, min_value=0.0, value=float(default_share),
-                    step=0.01, format="%.2f", key=f"e_unequal_{person}"
+                    person, min_value=0.0, value=saved_share,
+                    step=0.01, format="%.2f", key=f"e_unequal_{person}{ks}"
                 )
             e_entered = sum(e_amount_inputs.values())
             e_ok    = abs(e_entered - e_amt) < 0.01
