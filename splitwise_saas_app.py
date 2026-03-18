@@ -11,6 +11,7 @@ import plotly.express as px
 from io import BytesIO
 from datetime import datetime
 import json
+import uuid
 
 # ─────────────────────────────────────────────
 # PAGE CONFIG
@@ -234,7 +235,8 @@ def init_db():
             amount_original REAL NOT NULL,
             currency        TEXT NOT NULL,
             amount_base     REAL NOT NULL,
-            created_at      TEXT NOT NULL
+            created_at      TEXT NOT NULL,
+            expense_ref     TEXT
         );
     """)
     c.commit()
@@ -242,6 +244,13 @@ def init_db():
 
 conn   = init_db()
 cursor = conn.cursor()
+
+# ── Migration: add expense_ref if not present ──
+try:
+    cursor.execute("ALTER TABLE expenses ADD COLUMN expense_ref TEXT")
+    conn.commit()
+except Exception:
+    pass  # column already exists
 
 # ─────────────────────────────────────────────
 # CONSTANTS
@@ -254,7 +263,7 @@ CATEGORIES = [
 ]
 
 COMMON_CURRENCIES = [
-    "EUR", "USD", "GBP", "INR", "JPY", "AED", "SGD","LEI",
+    "EUR", "USD", "GBP", "INR", "JPY", "AED", "SGD",
     "CHF", "AUD", "CAD", "THB", "MYR", "IDR", "KRW", "HKD",
 ]
 
@@ -612,25 +621,26 @@ with tab_add:
                 st.error(err)
             else:
                 now = datetime.now().isoformat()
+                ref = str(uuid.uuid4())
                 if split_mode == "Equal Split":
                     share_orig = amount / len(split_between)
                     share_base = to_base(share_orig, exp_curr, currencies_map, base_currency)
                     for person in split_between:
                         cursor.execute("""
                             INSERT INTO expenses(group_id,date,description,category,paid_by,person,
-                                amount_original,currency,amount_base,created_at)
-                            VALUES(?,?,?,?,?,?,?,?,?,?)
+                                amount_original,currency,amount_base,created_at,expense_ref)
+                            VALUES(?,?,?,?,?,?,?,?,?,?,?)
                         """, (group_id, str(exp_date), desc.strip(), category,
-                              payer, person, share_orig, exp_curr, share_base, now))
+                              payer, person, share_orig, exp_curr, share_base, now, ref))
                 else:
                     for person, val in amount_inputs.items():
                         base_val = to_base(val, exp_curr, currencies_map, base_currency)
                         cursor.execute("""
                             INSERT INTO expenses(group_id,date,description,category,paid_by,person,
-                                amount_original,currency,amount_base,created_at)
-                            VALUES(?,?,?,?,?,?,?,?,?,?)
+                                amount_original,currency,amount_base,created_at,expense_ref)
+                            VALUES(?,?,?,?,?,?,?,?,?,?,?)
                         """, (group_id, str(exp_date), desc.strip(), category,
-                              payer, person, val, exp_curr, base_val, now))
+                              payer, person, val, exp_curr, base_val, now, ref))
                 conn.commit()
                 st.success(f"✅ '{desc}' added successfully!")
                 st.rerun()
@@ -707,55 +717,200 @@ with tab_manage:
 
     st.markdown("---")
 
-    # Edit / Delete Expenses
+    # Edit / Delete Expenses — full re-split form
     st.markdown('<div class="section-label">✏️ Edit / Delete Expenses</div>', unsafe_allow_html=True)
     df_edit = get_expenses(group_id)
-    if not df_edit.empty:
+
+    if df_edit.empty:
+        st.info("No expenses to edit yet.")
+    else:
         mgmt_members = get_members(group_id)
         mgmt_currs   = get_currencies(group_id)
         mgmt_cl      = list(mgmt_currs.keys())
 
-        options = df_edit.apply(
-            lambda r: f"#{int(r['id'])}  {r['date']}  |  {r['description']}  |  {r['paid_by']} → {r['person']}  |  {r['currency']} {float(r['amount_original']):,.2f}",
-            axis=1
+        # ── Build grouped expense list ──
+        # Group by expense_ref if present, else fallback to (description,date,paid_by,currency)
+        def get_ref(row):
+            if pd.notna(row.get("expense_ref")) and str(row["expense_ref"]).strip():
+                return row["expense_ref"]
+            return f'{row["description"]}||{row["date"]}||{row["paid_by"]}||{row["currency"]}'
+
+        df_edit["_ref"] = df_edit.apply(get_ref, axis=1)
+
+        # One representative row per expense group
+        grouped = (
+            df_edit.groupby("_ref", sort=False)
+            .agg(
+                id=("id", "first"),
+                date=("date", "first"),
+                description=("description", "first"),
+                category=("category", "first"),
+                paid_by=("paid_by", "first"),
+                currency=("currency", "first"),
+                total_orig=("amount_original", "sum"),
+                persons=("person", list),
+                amounts=("amount_original", list),
+                expense_ref=("_ref", "first"),
+            )
+            .reset_index(drop=True)
+        )
+
+        options_g = grouped.apply(
+            lambda r: (
+                f"{r['date']}  |  {r['description']}  |  "
+                f"Paid by {r['paid_by']}  |  "
+                f"{r['currency']} {float(r['total_orig']):,.2f}  |  "
+                f"Split: {', '.join(r['persons'])}"
+            ), axis=1
         ).tolist()
 
-        sel_idx = st.selectbox("Select Expense", range(len(options)), format_func=lambda i: options[i], key="edit_sel")
-        row     = df_edit.iloc[sel_idx]
+        eg_idx  = st.selectbox("Select Expense to Edit", range(len(options_g)),
+                               format_func=lambda i: options_g[i], key="edit_grp_sel")
+        eg_row  = grouped.iloc[eg_idx]
+        e_ref   = eg_row["expense_ref"]
 
-        ec1, ec2, ec3, ec4 = st.columns(4)
+        # Detect current split type
+        persons_now  = list(eg_row["persons"])
+        amounts_now  = list(eg_row["amounts"])
+        total_now    = float(eg_row["total_orig"])
+        is_equal_now = all(abs(a - amounts_now[0]) < 0.01 for a in amounts_now) if amounts_now else True
+
+        st.markdown('<div class="section-label">Edit Expense Details</div>', unsafe_allow_html=True)
+
+        ec1, ec2, ec3, ec4 = st.columns([2, 1, 1, 1])
         with ec1:
-            e_desc = st.text_input("Description", row["description"], key="e_desc")
+            e_desc = st.text_input("Description", eg_row["description"], key="e_desc")
         with ec2:
-            e_amt  = st.number_input("Amount", value=float(row["amount_original"]), step=0.01, format="%.2f", key="e_amt")
+            e_ci   = mgmt_cl.index(eg_row["currency"]) if eg_row["currency"] in mgmt_cl else 0
+            e_curr = st.selectbox("Currency", mgmt_cl, index=e_ci, key="e_curr")
         with ec3:
-            e_pi   = mgmt_members.index(row["paid_by"]) if row["paid_by"] in mgmt_members else 0
-            e_payer = st.selectbox("Paid By", mgmt_members, index=e_pi, key="e_payer")
+            e_amt  = st.number_input("Total Amount", value=total_now, min_value=0.0,
+                                     step=0.01, format="%.2f", key="e_amt")
         with ec4:
-            e_date  = st.date_input("Date", pd.to_datetime(row["date"]), key="e_date")
+            e_date = st.date_input("Date", pd.to_datetime(eg_row["date"]), key="e_date")
 
-        e_ci   = mgmt_cl.index(row["currency"]) if row["currency"] in mgmt_cl else 0
-        e_curr = st.selectbox("Currency", mgmt_cl, index=e_ci, key="e_curr")
+        ec5, ec6 = st.columns(2)
+        with ec5:
+            e_pi    = mgmt_members.index(eg_row["paid_by"]) if eg_row["paid_by"] in mgmt_members else 0
+            e_payer = st.selectbox("Paid By", mgmt_members, index=e_pi, key="e_payer")
+        with ec6:
+            cat_list = CATEGORIES
+            e_cat_i  = cat_list.index(eg_row["category"]) if eg_row["category"] in cat_list else 0
+            e_cat    = st.selectbox("Category", cat_list, index=e_cat_i, key="e_cat")
+
+        # Live conversion preview
+        if e_curr != base_currency and e_amt > 0:
+            rate_e      = mgmt_currs.get(e_curr, 1.0)
+            base_equiv_e = to_base(e_amt, e_curr, mgmt_currs, base_currency)
+            st.markdown(f"""
+            <div class="conv-info">
+                💱 <span>{e_curr} {e_amt:,.2f}</span>
+                &nbsp;→&nbsp;
+                <strong>{base_currency} {base_equiv_e:,.2f}</strong>
+                <span style="margin-left:auto;font-size:0.78rem;color:#3A5070;">
+                    1 {base_currency} = {rate_e} {e_curr}
+                </span>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown('<div class="section-label">Edit Split Configuration</div>', unsafe_allow_html=True)
+
+        e_split_default = "Equal Split" if is_equal_now else "Unequal Split"
+        e_split_mode    = st.radio("Split Type", ["Equal Split", "Unequal Split"],
+                                   index=0 if is_equal_now else 1,
+                                   horizontal=True, key="e_split_mode")
+
+        valid_default = [p for p in persons_now if p in mgmt_members]
+        e_split_between = st.multiselect("Split Between", mgmt_members,
+                                         default=valid_default or mgmt_members,
+                                         key="e_split_between")
+
+        e_amount_inputs = {}
+        if e_split_mode == "Unequal Split" and e_split_between:
+            st.markdown("**Enter each person's share:**")
+            ecols = st.columns(min(len(e_split_between), 4))
+            for i, person in enumerate(e_split_between):
+                default_share = dict(zip(persons_now, amounts_now)).get(person, 0.0)
+                e_amount_inputs[person] = ecols[i % 4].number_input(
+                    person, min_value=0.0, value=float(default_share),
+                    step=0.01, format="%.2f", key=f"e_unequal_{person}"
+                )
+            e_entered = sum(e_amount_inputs.values())
+            e_ok    = abs(e_entered - e_amt) < 0.01
+            e_color = "#00D4AA" if e_ok else "#F06090"
+            st.markdown(
+                f"<span style='color:{e_color};font-size:0.85rem;font-family:JetBrains Mono,monospace;'>"
+                f"Entered: {e_curr} {e_entered:,.2f} / {e_curr} {e_amt:,.2f}</span>",
+                unsafe_allow_html=True
+            )
 
         eu1, eu2 = st.columns(2)
         with eu1:
             if st.button("✅ Update Expense", use_container_width=True, key="btn_update"):
-                new_base = to_base(e_amt, e_curr, mgmt_currs, base_currency)
-                cursor.execute("""
-                    UPDATE expenses SET description=?,paid_by=?,amount_original=?,
-                    currency=?,amount_base=?,date=? WHERE id=?
-                """, (e_desc, e_payer, e_amt, e_curr, new_base, str(e_date), int(row["id"])))
-                conn.commit()
-                st.success("Updated!")
-                st.rerun()
+                err_e = None
+                if not e_desc.strip():        err_e = "Enter a description."
+                elif e_amt <= 0:              err_e = "Amount must be greater than zero."
+                elif not e_split_between:     err_e = "Select at least one person."
+                elif e_split_mode == "Unequal Split" and abs(sum(e_amount_inputs.values()) - e_amt) > 0.01:
+                    err_e = f"Shares sum to {sum(e_amount_inputs.values()):.2f} but total is {e_amt:.2f}."
+
+                if err_e:
+                    st.error(err_e)
+                else:
+                    # Delete all rows sharing this ref
+                    if pd.notna(e_ref) and "||" not in str(e_ref):
+                        cursor.execute("DELETE FROM expenses WHERE expense_ref=?", (e_ref,))
+                    else:
+                        parts = str(e_ref).split("||")
+                        if len(parts) == 4:
+                            cursor.execute(
+                                "DELETE FROM expenses WHERE group_id=? AND description=? AND date=? AND paid_by=? AND currency=?",
+                                (group_id, parts[0], parts[1], parts[2], parts[3])
+                            )
+                        else:
+                            cursor.execute("DELETE FROM expenses WHERE expense_ref=?", (e_ref,))
+
+                    new_ref  = str(uuid.uuid4())
+                    now_e    = datetime.now().isoformat()
+                    if e_split_mode == "Equal Split":
+                        share_orig = e_amt / len(e_split_between)
+                        share_base = to_base(share_orig, e_curr, mgmt_currs, base_currency)
+                        for person in e_split_between:
+                            cursor.execute("""
+                                INSERT INTO expenses(group_id,date,description,category,paid_by,person,
+                                    amount_original,currency,amount_base,created_at,expense_ref)
+                                VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                            """, (group_id, str(e_date), e_desc.strip(), e_cat,
+                                  e_payer, person, share_orig, e_curr, share_base, now_e, new_ref))
+                    else:
+                        for person, val in e_amount_inputs.items():
+                            base_val = to_base(val, e_curr, mgmt_currs, base_currency)
+                            cursor.execute("""
+                                INSERT INTO expenses(group_id,date,description,category,paid_by,person,
+                                    amount_original,currency,amount_base,created_at,expense_ref)
+                                VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                            """, (group_id, str(e_date), e_desc.strip(), e_cat,
+                                  e_payer, person, val, e_curr, base_val, now_e, new_ref))
+                    conn.commit()
+                    st.success("✅ Expense updated!")
+                    st.rerun()
+
         with eu2:
             if st.button("🗑️ Delete Expense", use_container_width=True, key="btn_delete"):
-                cursor.execute("DELETE FROM expenses WHERE id=?", (int(row["id"]),))
+                if pd.notna(e_ref) and "||" not in str(e_ref):
+                    cursor.execute("DELETE FROM expenses WHERE expense_ref=?", (e_ref,))
+                else:
+                    parts = str(e_ref).split("||")
+                    if len(parts) == 4:
+                        cursor.execute(
+                            "DELETE FROM expenses WHERE group_id=? AND description=? AND date=? AND paid_by=? AND currency=?",
+                            (group_id, parts[0], parts[1], parts[2], parts[3])
+                        )
+                    else:
+                        cursor.execute("DELETE FROM expenses WHERE expense_ref=?", (e_ref,))
                 conn.commit()
-                st.success("Deleted!")
+                st.success("🗑️ Expense deleted!")
                 st.rerun()
-    else:
-        st.info("No expenses to edit yet.")
 
 # ══════════════════════════════════════════════
 # TAB 4 — ANALYTICS
@@ -766,11 +921,6 @@ with tab_analytics:
     if df.empty:
         st.markdown('<div class="empty-state"><div class="emoji">📊</div><p>No data yet.<br>Add expenses to unlock analytics.</p></div>', unsafe_allow_html=True)
     else:
-        a1, a2 = st.columns(2)
-
-        spend_person = df.groupby("paid_by")["amount_base"].sum().reset_index()
-        spend_person.columns = ["Person", "Total"]
-
         def apply_theme(fig, extra=None):
             layout = dict(
                 template="plotly_dark",
@@ -784,20 +934,102 @@ with tab_analytics:
             fig.update_layout(**layout)
             return fig
 
+        # ── True Personal Spend Calculation ──────────────────────────────
+        # For each person:
+        #   spent_on_self    = paid_by == me  AND  person == me
+        #   others_paid_me   = paid_by != me  AND  person == me
+        #   i_paid_others    = paid_by == me  AND  person != me
+        #   TRUE SPEND = spent_on_self + others_paid_me - i_paid_others
+        #              = sum(person == me)  -  i_paid_others
+        # ─────────────────────────────────────────────────────────────────
+        all_persons = members if members else sorted(df["person"].unique().tolist())
+
+        spend_rows = []
+        for p in all_persons:
+            spent_on_self  = df[(df["paid_by"] == p) & (df["person"] == p)]["amount_base"].sum()
+            others_paid_me = df[(df["person"]  == p) & (df["paid_by"] != p)]["amount_base"].sum()
+            i_paid_others  = df[(df["paid_by"] == p) & (df["person"]  != p)]["amount_base"].sum()
+            true_spend     = round(spent_on_self + others_paid_me - i_paid_others, 2)
+            spend_rows.append({
+                "Person":          p,
+                "Spent on Self":   round(spent_on_self,  2),
+                "Others Paid Me":  round(others_paid_me, 2),
+                "I Paid for Others": round(i_paid_others, 2),
+                "True Spend":      true_spend,
+            })
+
+        spend_df = pd.DataFrame(spend_rows)
+
+        # ── Row 1: stacked bar + donut ────────────────────────────────────
+        a1, a2 = st.columns(2)
+
         with a1:
-            fig = px.bar(spend_person, x="Person", y="Total", color="Person",
-                         title=f"Spending by Person ({base_currency})",
-                         color_discrete_sequence=PALETTE)
-            apply_theme(fig, {"showlegend": False})
-            fig.update_traces(marker_line_width=0)
+            # Stacked bar showing the three components
+            import plotly.graph_objects as go
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                name="Spent on Self",
+                x=spend_df["Person"],
+                y=spend_df["Spent on Self"],
+                marker_color="#5B9CF6",
+                marker_line_width=0,
+            ))
+            fig.add_trace(go.Bar(
+                name="Others Paid Me",
+                x=spend_df["Person"],
+                y=spend_df["Others Paid Me"],
+                marker_color="#00D4AA",
+                marker_line_width=0,
+            ))
+            fig.add_trace(go.Bar(
+                name="I Paid for Others",
+                x=spend_df["Person"],
+                y=-spend_df["I Paid for Others"],   # negative → goes below zero
+                marker_color="#F06090",
+                marker_line_width=0,
+            ))
+            # Net true-spend marker line
+            fig.add_trace(go.Scatter(
+                name="True Spend (Net)",
+                x=spend_df["Person"],
+                y=spend_df["True Spend"],
+                mode="markers+text",
+                marker=dict(color="#F0A500", size=10, symbol="diamond"),
+                text=[f"{base_currency} {v:,.0f}" for v in spend_df["True Spend"]],
+                textposition="top center",
+                textfont=dict(size=11, color="#F0A500"),
+            ))
+            apply_theme(fig, {
+                "barmode": "relative",
+                "title":   f"True Spend Breakdown ({base_currency})",
+                "legend":  dict(orientation="h", y=-0.2, font=dict(size=11)),
+                "yaxis":   dict(title=base_currency, gridcolor="#1C2535"),
+                "xaxis":   dict(gridcolor="#1C2535"),
+            })
             st.plotly_chart(fig, use_container_width=True)
 
         with a2:
-            fig2 = px.pie(spend_person, values="Total", names="Person",
-                          title="Expense Share by Person",
-                          color_discrete_sequence=PALETTE, hole=0.45)
+            fig2 = px.pie(
+                spend_df[spend_df["True Spend"] > 0],
+                values="True Spend", names="Person",
+                title=f"True Spend Share ({base_currency})",
+                color_discrete_sequence=PALETTE, hole=0.45,
+            )
             apply_theme(fig2)
             st.plotly_chart(fig2, use_container_width=True)
+
+        # ── Breakdown table ───────────────────────────────────────────────
+        st.markdown('<div class="section-label">📋 True Spend Breakdown per Person</div>', unsafe_allow_html=True)
+        table_df = spend_df.copy()
+        for col in ["Spent on Self","Others Paid Me","I Paid for Others","True Spend"]:
+            table_df[col] = table_df[col].apply(lambda v: f"{base_currency} {v:,.2f}")
+        st.dataframe(table_df, use_container_width=True, hide_index=True)
+
+        st.markdown(
+            '<div style="font-size:0.78rem;color:#3A5070;margin-top:-8px;margin-bottom:16px;">'
+            '🟦 Spent on Self &nbsp;|&nbsp; 🟩 Others Paid Me &nbsp;|&nbsp; 🟥 I Paid for Others (deducted) &nbsp;|&nbsp; 🔶 Net True Spend</div>',
+            unsafe_allow_html=True
+        )
 
         a3, a4 = st.columns(2)
 
