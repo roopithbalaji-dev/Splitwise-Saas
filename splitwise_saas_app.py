@@ -474,6 +474,12 @@ def compute_settlements(balance: dict) -> list:
 
 with st.sidebar:
     st.markdown('<div style="padding:16px 0 4px;"><h2 style="margin:0;font-size:1.3rem;background:linear-gradient(135deg,#5B9CF6,#00D4AA);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">💸 Splitwise Pro</h2></div>', unsafe_allow_html=True)
+    db_badge = (
+        '<div style="display:inline-block;padding:3px 8px;border-radius:12px;background:rgba(0,212,170,0.15);color:#00D4AA;font-size:0.72rem;font-weight:600;margin-bottom:12px;">🟢 Neon PostgreSQL (Cloud)</div>'
+        if BACKEND == "postgres"
+        else '<div style="display:inline-block;padding:3px 8px;border-radius:12px;background:rgba(255,255,255,0.08);color:#8892b0;font-size:0.72rem;margin-bottom:12px;">⚪ SQLite (Local)</div>'
+    )
+    st.markdown(db_badge, unsafe_allow_html=True)
 
     # ── Create Trip ──
     st.markdown('<div class="sidebar-section">New Trip / Project</div>', unsafe_allow_html=True)
