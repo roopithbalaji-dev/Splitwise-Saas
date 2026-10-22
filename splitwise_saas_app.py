@@ -216,16 +216,39 @@ for _env_file in (".env.local", ".env"):
         except Exception:
             pass
 
-_DATABASE_URL = (
-    st.secrets.get("DATABASE_URL", None)
-    if hasattr(st, "secrets") else None
-) or os.environ.get("DATABASE_URL", None)
+def _detect_db_url():
+    # 1. Session state override (if user typed or clicked connect in UI)
+    if "override_db_url" in st.session_state and st.session_state["override_db_url"]:
+        return st.session_state["override_db_url"].strip()
 
+    # 2. Check Streamlit Cloud secrets thoroughly
+    try:
+        if hasattr(st, "secrets"):
+            if "DATABASE_URL" in st.secrets:
+                return str(st.secrets["DATABASE_URL"]).strip()
+            if "database_url" in st.secrets:
+                return str(st.secrets["database_url"]).strip()
+            for k in st.secrets:
+                val = st.secrets[k]
+                if isinstance(val, dict):
+                    for sub_k in ("url", "database_url", "DATABASE_URL"):
+                        if sub_k in val:
+                            return str(val[sub_k]).strip()
+                elif isinstance(val, str) and ("postgres" in val.lower() or "neon.tech" in val.lower()):
+                    return str(val).strip()
+    except Exception:
+        pass
+
+    # 3. Check environment variables
+    for k in ("DATABASE_URL", "DATABASE_URL_UNPOOLED", "database_url"):
+        val = os.environ.get(k)
+        if val:
+            return val.strip()
+
+    return None
+
+_DATABASE_URL = _detect_db_url()
 _USE_PG = bool(_DATABASE_URL)
-
-def _pg_connect():
-    import psycopg2
-    return psycopg2.connect(_DATABASE_URL)
 
 def _sqlite_connect():
     return sqlite3.connect("splitwise_pro.db", check_same_thread=False)
@@ -303,9 +326,10 @@ CREATE TABLE IF NOT EXISTS expenses (
 """
 
 @st.cache_resource
-def init_db():
-    if _USE_PG:
-        c = _pg_connect()
+def init_db(db_url):
+    if db_url:
+        import psycopg2
+        c = psycopg2.connect(db_url)
         cur = c.cursor()
         for stmt in _DDL_POSTGRES.strip().split(";"):
             stmt = stmt.strip()
@@ -323,7 +347,7 @@ def init_db():
             pass
         return c, "?", "sqlite"
 
-conn, PH, BACKEND = init_db()
+conn, PH, BACKEND = init_db(_DATABASE_URL)
 
 
 def _cursor():
@@ -334,7 +358,8 @@ def _cursor():
             cur.execute("SELECT 1")
             return cur
         except Exception:
-            new_conn = _pg_connect()
+            import psycopg2
+            new_conn = psycopg2.connect(_DATABASE_URL)
             globals()["conn"] = new_conn
             return new_conn.cursor()
     return conn.cursor()
@@ -480,6 +505,23 @@ with st.sidebar:
         else '<div style="display:inline-block;padding:3px 8px;border-radius:12px;background:rgba(255,255,255,0.08);color:#8892b0;font-size:0.72rem;margin-bottom:12px;">⚪ SQLite (Local)</div>'
     )
     st.markdown(db_badge, unsafe_allow_html=True)
+    if BACKEND == "sqlite":
+        with st.expander("⚙️ Connect Neon Cloud", expanded=False):
+            sec_keys = []
+            try:
+                sec_keys = list(st.secrets.keys())
+            except Exception:
+                pass
+            st.caption(f"Detected secrets: {sec_keys if sec_keys else 'None found'}")
+            manual_url = st.text_input("Or paste Neon DATABASE_URL:", type="password", key="inp_neon_url")
+            if st.button("Connect Now", key="btn_connect_now"):
+                if manual_url.strip():
+                    st.session_state["override_db_url"] = manual_url.strip()
+                    st.cache_resource.clear()
+                    st.rerun()
+            if st.button("Clear Cache & Re-check Secrets", key="btn_retry_sec"):
+                st.cache_resource.clear()
+                st.rerun()
 
     # ── Create Trip ──
     st.markdown('<div class="sidebar-section">New Trip / Project</div>', unsafe_allow_html=True)
