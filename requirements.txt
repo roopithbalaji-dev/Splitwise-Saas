@@ -3,3 +3,4 @@ pandas
 plotly
 openpyxl
 passlib
+psycopg2-binary

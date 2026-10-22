@@ -4,6 +4,7 @@ Premium dark UI · Multi-currency · JSON Save/Load · Analytics
 Run with: streamlit run splitwise_pro.py
 """
 
+import os
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -198,59 +199,179 @@ hr { border-color: #1C2535; margin: 20px 0; }
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
-# DATABASE INIT
+# DATABASE LAYER  (PostgreSQL or SQLite)
 # ─────────────────────────────────────────────
+# Set the DATABASE_URL Streamlit secret → uses PostgreSQL (multi-user, persistent)
+# No DATABASE_URL → falls back to local SQLite (single-machine dev/testing only)
+
+_DATABASE_URL = (
+    st.secrets.get("DATABASE_URL", None)
+    if hasattr(st, "secrets") else None
+) or os.environ.get("DATABASE_URL", None)
+
+_USE_PG = bool(_DATABASE_URL)
+
+def _pg_connect():
+    import psycopg2
+    return psycopg2.connect(_DATABASE_URL)
+
+def _sqlite_connect():
+    return sqlite3.connect("splitwise_pro.db", check_same_thread=False)
+
+_DDL_POSTGRES = """
+CREATE TABLE IF NOT EXISTS groups (
+    id            SERIAL PRIMARY KEY,
+    name          TEXT UNIQUE NOT NULL,
+    base_currency TEXT NOT NULL DEFAULT 'EUR',
+    created_at    TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS currencies (
+    id       SERIAL PRIMARY KEY,
+    group_id INTEGER NOT NULL,
+    code     TEXT NOT NULL,
+    rate     REAL NOT NULL DEFAULT 1.0,
+    UNIQUE(group_id, code)
+);
+CREATE TABLE IF NOT EXISTS members (
+    id       SERIAL PRIMARY KEY,
+    group_id INTEGER NOT NULL,
+    name     TEXT NOT NULL,
+    UNIQUE(group_id, name)
+);
+CREATE TABLE IF NOT EXISTS expenses (
+    id              SERIAL PRIMARY KEY,
+    group_id        INTEGER NOT NULL,
+    date            TEXT NOT NULL,
+    description     TEXT NOT NULL,
+    category        TEXT,
+    paid_by         TEXT NOT NULL,
+    person          TEXT NOT NULL,
+    amount_original REAL NOT NULL,
+    currency        TEXT NOT NULL,
+    amount_base     REAL NOT NULL,
+    created_at      TEXT NOT NULL,
+    expense_ref     TEXT
+);
+"""
+
+_DDL_SQLITE = """
+CREATE TABLE IF NOT EXISTS groups (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    name          TEXT UNIQUE NOT NULL,
+    base_currency TEXT NOT NULL DEFAULT 'EUR',
+    created_at    TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS currencies (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL,
+    code     TEXT NOT NULL,
+    rate     REAL NOT NULL DEFAULT 1.0,
+    UNIQUE(group_id, code)
+);
+CREATE TABLE IF NOT EXISTS members (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL,
+    name     TEXT NOT NULL,
+    UNIQUE(group_id, name)
+);
+CREATE TABLE IF NOT EXISTS expenses (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id        INTEGER NOT NULL,
+    date            TEXT NOT NULL,
+    description     TEXT NOT NULL,
+    category        TEXT,
+    paid_by         TEXT NOT NULL,
+    person          TEXT NOT NULL,
+    amount_original REAL NOT NULL,
+    currency        TEXT NOT NULL,
+    amount_base     REAL NOT NULL,
+    created_at      TEXT NOT NULL,
+    expense_ref     TEXT
+);
+"""
 
 @st.cache_resource
 def init_db():
-    c = sqlite3.connect("splitwise_pro.db", check_same_thread=False)
-    c.executescript("""
-        CREATE TABLE IF NOT EXISTS groups (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            name          TEXT UNIQUE NOT NULL,
-            base_currency TEXT NOT NULL DEFAULT 'EUR',
-            created_at    TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS currencies (
-            id       INTEGER PRIMARY KEY AUTOINCREMENT,
-            group_id INTEGER NOT NULL,
-            code     TEXT NOT NULL,
-            rate     REAL NOT NULL DEFAULT 1.0,
-            UNIQUE(group_id, code)
-        );
-        CREATE TABLE IF NOT EXISTS members (
-            id       INTEGER PRIMARY KEY AUTOINCREMENT,
-            group_id INTEGER NOT NULL,
-            name     TEXT NOT NULL,
-            UNIQUE(group_id, name)
-        );
-        CREATE TABLE IF NOT EXISTS expenses (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            group_id        INTEGER NOT NULL,
-            date            TEXT NOT NULL,
-            description     TEXT NOT NULL,
-            category        TEXT,
-            paid_by         TEXT NOT NULL,
-            person          TEXT NOT NULL,
-            amount_original REAL NOT NULL,
-            currency        TEXT NOT NULL,
-            amount_base     REAL NOT NULL,
-            created_at      TEXT NOT NULL,
-            expense_ref     TEXT
-        );
-    """)
-    c.commit()
-    return c
+    if _USE_PG:
+        c = _pg_connect()
+        cur = c.cursor()
+        for stmt in _DDL_POSTGRES.strip().split(";"):
+            stmt = stmt.strip()
+            if stmt:
+                cur.execute(stmt)
+        c.commit()
+        return c, "%s", "postgres"
+    else:
+        c = _sqlite_connect()
+        c.executescript(_DDL_SQLITE)
+        try:
+            c.execute("ALTER TABLE expenses ADD COLUMN expense_ref TEXT")
+            c.commit()
+        except Exception:
+            pass
+        return c, "?", "sqlite"
 
-conn   = init_db()
-cursor = conn.cursor()
+conn, PH, BACKEND = init_db()
 
-# ── Migration: add expense_ref if not present ──
-try:
-    cursor.execute("ALTER TABLE expenses ADD COLUMN expense_ref TEXT")
-    conn.commit()
-except Exception:
-    pass  # column already exists
+
+def _cursor():
+    """Return a live cursor; auto-reconnects a dropped Postgres connection."""
+    if BACKEND == "postgres":
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+            return cur
+        except Exception:
+            new_conn = _pg_connect()
+            globals()["conn"] = new_conn
+            return new_conn.cursor()
+    return conn.cursor()
+
+
+def _execute(sql, params=(), fetch=False, fetchone=False, commit=False):
+    """Unified execute: translates ? to %s for Postgres automatically."""
+    cur = _cursor()
+    sql_run = sql.replace("?", "%s") if BACKEND == "postgres" else sql
+    cur.execute(sql_run, params)
+    result = None
+    if fetchone:
+        result = cur.fetchone()
+    elif fetch:
+        result = cur.fetchall()
+    if commit:
+        conn.commit()
+    return result, cur
+
+
+def _insert_ignore(table, cols, vals, conflict_cols=""):
+    ph       = ", ".join([PH] * len(cols))
+    cols_str = ", ".join(cols)
+    if BACKEND == "postgres":
+        on_conflict = (
+            f"ON CONFLICT ({conflict_cols}) DO NOTHING" if conflict_cols
+            else "ON CONFLICT DO NOTHING"
+        )
+        sql = f"INSERT INTO {table} ({cols_str}) VALUES ({ph}) {on_conflict}"
+    else:
+        sql = f"INSERT OR IGNORE INTO {table} ({cols_str}) VALUES ({ph})"
+    _execute(sql, vals, commit=True)
+
+
+def _insert_replace(table, cols, vals, conflict_cols=""):
+    ph       = ", ".join([PH] * len(cols))
+    cols_str = ", ".join(cols)
+    if BACKEND == "postgres":
+        conflict_col_list = [c.strip() for c in conflict_cols.split(",")]
+        update_cols = [c for c in cols if c not in conflict_col_list]
+        updates     = ", ".join(f"{c}=EXCLUDED.{c}" for c in update_cols)
+        on_conflict = (
+            f"ON CONFLICT ({conflict_cols}) DO UPDATE SET {updates}" if updates
+            else "ON CONFLICT DO NOTHING"
+        )
+        sql = f"INSERT INTO {table} ({cols_str}) VALUES ({ph}) {on_conflict}"
+    else:
+        sql = f"INSERT OR REPLACE INTO {table} ({cols_str}) VALUES ({ph})"
+    _execute(sql, vals, commit=True)
 
 # ─────────────────────────────────────────────
 # CONSTANTS
@@ -275,17 +396,31 @@ PLOTLY_THEME = dict(template="plotly_dark", paper_bgcolor="#0D1219", plot_bgcolo
 # ─────────────────────────────────────────────
 
 def get_groups():
-    return cursor.execute("SELECT id,name,base_currency FROM groups ORDER BY created_at DESC").fetchall()
+    rows, _ = _execute(
+        "SELECT id,name,base_currency FROM groups ORDER BY created_at DESC", fetch=True
+    )
+    return rows
 
 def get_currencies(group_id: int) -> dict:
-    rows = cursor.execute("SELECT code,rate FROM currencies WHERE group_id=?", (group_id,)).fetchall()
+    rows, _ = _execute(
+        "SELECT code,rate FROM currencies WHERE group_id=?", (group_id,), fetch=True
+    )
     return {r[0]: r[1] for r in rows}
 
 def get_members(group_id: int) -> list:
-    rows = cursor.execute("SELECT name FROM members WHERE group_id=? ORDER BY name", (group_id,)).fetchall()
+    rows, _ = _execute(
+        "SELECT name FROM members WHERE group_id=? ORDER BY name", (group_id,), fetch=True
+    )
     return [r[0] for r in rows]
 
 def get_expenses(group_id: int) -> pd.DataFrame:
+    if BACKEND == "postgres":
+        cur = _cursor()
+        cur.execute(
+            "SELECT * FROM expenses WHERE group_id=%s ORDER BY date DESC, id DESC", (group_id,)
+        )
+        cols = [desc[0] for desc in cur.description]
+        return pd.DataFrame(cur.fetchall(), columns=cols)
     return pd.read_sql_query(
         "SELECT * FROM expenses WHERE group_id=? ORDER BY date DESC, id DESC",
         conn, params=(group_id,)
@@ -336,19 +471,23 @@ with st.sidebar:
         if st.button("Create Trip", use_container_width=True, key="btn_create"):
             if trip_name.strip():
                 try:
-                    cursor.execute(
-                        "INSERT INTO groups(name,base_currency,created_at) VALUES(?,?,?)",
-                        (trip_name.strip(), base_curr_sel, datetime.now().isoformat())
+                    _insert_ignore(
+                        "groups",
+                        ("name", "base_currency", "created_at"),
+                        (trip_name.strip(), base_curr_sel, datetime.now().isoformat()),
+                        conflict_cols="name"
                     )
-                    gid = cursor.lastrowid
-                    cursor.execute(
-                        "INSERT OR IGNORE INTO currencies(group_id,code,rate) VALUES(?,?,?)",
-                        (gid, base_curr_sel, 1.0)
+                    row, _ = _execute("SELECT id FROM groups WHERE name=?", (trip_name.strip(),), fetchone=True)
+                    gid = row[0]
+                    _insert_ignore(
+                        "currencies",
+                        ("group_id", "code", "rate"),
+                        (gid, base_curr_sel, 1.0),
+                        conflict_cols="group_id, code"
                     )
-                    conn.commit()
                     st.success(f"'{trip_name}' created!")
                     st.rerun()
-                except sqlite3.IntegrityError:
+                except Exception:
                     st.error("A trip with this name already exists.")
             else:
                 st.error("Enter a trip name.")
@@ -370,9 +509,8 @@ with st.sidebar:
         st.warning("Permanently deletes all data for this trip.")
         if st.button("Confirm Delete", use_container_width=True, key="btn_del_trip"):
             for tbl in ("expenses", "members", "currencies"):
-                cursor.execute(f"DELETE FROM {tbl} WHERE group_id=?", (group_id,))
-            cursor.execute("DELETE FROM groups WHERE id=?", (group_id,))
-            conn.commit()
+                _execute(f"DELETE FROM {tbl} WHERE group_id=?", (group_id,), commit=True)
+            _execute("DELETE FROM groups WHERE id=?", (group_id,), commit=True)
             st.rerun()
 
     # ── Save / Load ──
@@ -401,27 +539,28 @@ with st.sidebar:
         try:
             data = json.load(uploaded)
             grp  = data["group"]
-            cursor.execute(
-                "INSERT OR IGNORE INTO groups(name,base_currency,created_at) VALUES(?,?,?)",
-                (grp["name"], grp["base_currency"], datetime.now().isoformat())
+            _insert_ignore(
+                "groups",
+                ("name", "base_currency", "created_at"),
+                (grp["name"], grp["base_currency"], datetime.now().isoformat()),
+                conflict_cols="name"
             )
-            conn.commit()
-            ngid = cursor.execute("SELECT id FROM groups WHERE name=?", (grp["name"],)).fetchone()[0]
+            row, _ = _execute("SELECT id FROM groups WHERE name=?", (grp["name"],), fetchone=True)
+            ngid = row[0]
             for c in data.get("currencies", []):
-                cursor.execute("INSERT OR REPLACE INTO currencies(group_id,code,rate) VALUES(?,?,?)", (ngid, c["code"], c["rate"]))
+                _insert_replace("currencies", ("group_id", "code", "rate"), (ngid, c["code"], c["rate"]), conflict_cols="group_id, code")
             for m in data.get("members", []):
-                cursor.execute("INSERT OR IGNORE INTO members(group_id,name) VALUES(?,?)", (ngid, m))
-            cursor.execute("DELETE FROM expenses WHERE group_id=?", (ngid,))
+                _insert_ignore("members", ("group_id", "name"), (ngid, m), conflict_cols="group_id, name")
+            _execute("DELETE FROM expenses WHERE group_id=?", (ngid,), commit=True)
             for e in data.get("expenses", []):
-                cursor.execute("""
+                _execute("""
                     INSERT INTO expenses(group_id,date,description,category,paid_by,person,
                         amount_original,currency,amount_base,created_at)
                     VALUES(?,?,?,?,?,?,?,?,?,?)
                 """, (ngid, e.get("date"), e.get("description"), e.get("category"),
                       e.get("paid_by"), e.get("person"), e.get("amount_original"),
                       e.get("currency"), e.get("amount_base"),
-                      e.get("created_at", datetime.now().isoformat())))
-            conn.commit()
+                      e.get("created_at", datetime.now().isoformat())), commit=True)
             st.success(f"Loaded '{grp['name']}'!")
             st.rerun()
         except Exception as ex:
@@ -671,22 +810,21 @@ with tab_add:
                     share_orig = amount / len(split_between)
                     share_base = to_base(share_orig, exp_curr, currencies_map, base_currency)
                     for person in split_between:
-                        cursor.execute("""
+                        _execute("""
                             INSERT INTO expenses(group_id,date,description,category,paid_by,person,
                                 amount_original,currency,amount_base,created_at,expense_ref)
                             VALUES(?,?,?,?,?,?,?,?,?,?,?)
                         """, (group_id, str(exp_date), desc.strip(), category,
-                              payer, person, share_orig, exp_curr, share_base, now, ref))
+                              payer, person, share_orig, exp_curr, share_base, now, ref), commit=True)
                 else:
                     for person, val in amount_inputs.items():
                         base_val = to_base(val, exp_curr, currencies_map, base_currency)
-                        cursor.execute("""
+                        _execute("""
                             INSERT INTO expenses(group_id,date,description,category,paid_by,person,
                                 amount_original,currency,amount_base,created_at,expense_ref)
                             VALUES(?,?,?,?,?,?,?,?,?,?,?)
                         """, (group_id, str(exp_date), desc.strip(), category,
-                              payer, person, val, exp_curr, base_val, now, ref))
-                conn.commit()
+                              payer, person, val, exp_curr, base_val, now, ref), commit=True)
                 st.success(f"✅ '{desc}' added successfully!")
                 st.rerun()
 
@@ -705,8 +843,7 @@ with tab_manage:
         if st.button("Add Member", use_container_width=True, key="btn_add_member"):
             if nm.strip():
                 try:
-                    cursor.execute("INSERT OR IGNORE INTO members(group_id,name) VALUES(?,?)", (group_id, nm.strip()))
-                    conn.commit()
+                    _insert_ignore("members", ("group_id", "name"), (group_id, nm.strip()), conflict_cols="group_id, name")
                     st.success(f"Added {nm.strip()}")
                     st.rerun()
                 except Exception as ex:
@@ -720,8 +857,7 @@ with tab_manage:
                 mc1, mc2 = st.columns([4, 1])
                 mc1.markdown(f'<div style="padding:10px 0;color:#C0CCD8;">👤 {m}</div>', unsafe_allow_html=True)
                 if mc2.button("✕", key=f"rm_m_{m}"):
-                    cursor.execute("DELETE FROM members WHERE group_id=? AND name=?", (group_id, m))
-                    conn.commit()
+                    _execute("DELETE FROM members WHERE group_id=? AND name=?", (group_id, m), commit=True)
                     st.rerun()
         else:
             st.markdown('<div class="empty-state" style="padding:24px;"><p>No members yet.</p></div>', unsafe_allow_html=True)
@@ -740,11 +876,7 @@ with tab_manage:
             key="mgmt_curr_rate"
         )
         if st.button("Add Currency", use_container_width=True, key="btn_add_curr"):
-            cursor.execute(
-                "INSERT OR REPLACE INTO currencies(group_id,code,rate) VALUES(?,?,?)",
-                (group_id, nc_code, nc_rate)
-            )
-            conn.commit()
+            _insert_replace("currencies", ("group_id", "code", "rate"), (group_id, nc_code, nc_rate), conflict_cols="group_id, code")
             st.success(f"{nc_code} added — 1 {base_currency} = {nc_rate} {nc_code}")
             st.rerun()
 
@@ -756,8 +888,7 @@ with tab_manage:
             cc1.markdown(f'<span style="font-family:JetBrains Mono,monospace;color:#5B9CF6;font-weight:700;">{code}</span>', unsafe_allow_html=True)
             cc2.markdown(f'<span style="color:#5A7090;font-size:0.82rem;">1 {base_currency} = {rate:,.4f} {code}</span>', unsafe_allow_html=True)
             if cc3.button("✕", key=f"rm_c_{code}"):
-                cursor.execute("DELETE FROM currencies WHERE group_id=? AND code=?", (group_id, code))
-                conn.commit()
+                _execute("DELETE FROM currencies WHERE group_id=? AND code=?", (group_id, code), commit=True)
                 st.rerun()
 
     st.markdown("---")
@@ -932,16 +1063,16 @@ with tab_manage:
                 else:
                     # Delete all rows sharing this ref
                     if pd.notna(e_ref) and "||" not in str(e_ref):
-                        cursor.execute("DELETE FROM expenses WHERE expense_ref=?", (e_ref,))
+                        _execute("DELETE FROM expenses WHERE expense_ref=?", (e_ref,), commit=True)
                     else:
                         parts = str(e_ref).split("||")
                         if len(parts) == 4:
-                            cursor.execute(
+                            _execute(
                                 "DELETE FROM expenses WHERE group_id=? AND description=? AND date=? AND paid_by=? AND currency=?",
-                                (group_id, parts[0], parts[1], parts[2], parts[3])
+                                (group_id, parts[0], parts[1], parts[2], parts[3]), commit=True
                             )
                         else:
-                            cursor.execute("DELETE FROM expenses WHERE expense_ref=?", (e_ref,))
+                            _execute("DELETE FROM expenses WHERE expense_ref=?", (e_ref,))
 
                     new_ref  = str(uuid.uuid4())
                     now_e    = datetime.now().isoformat()
@@ -949,7 +1080,7 @@ with tab_manage:
                         share_orig = e_amt / len(e_split_between)
                         share_base = to_base(share_orig, e_curr, mgmt_currs, base_currency)
                         for person in e_split_between:
-                            cursor.execute("""
+                            _execute("""
                                 INSERT INTO expenses(group_id,date,description,category,paid_by,person,
                                     amount_original,currency,amount_base,created_at,expense_ref)
                                 VALUES(?,?,?,?,?,?,?,?,?,?,?)
@@ -958,30 +1089,30 @@ with tab_manage:
                     else:
                         for person, val in e_amount_inputs.items():
                             base_val = to_base(val, e_curr, mgmt_currs, base_currency)
-                            cursor.execute("""
+                            _execute("""
                                 INSERT INTO expenses(group_id,date,description,category,paid_by,person,
                                     amount_original,currency,amount_base,created_at,expense_ref)
                                 VALUES(?,?,?,?,?,?,?,?,?,?,?)
                             """, (group_id, str(e_date), e_desc.strip(), e_cat,
                                   e_payer, person, val, e_curr, base_val, now_e, new_ref))
-                    conn.commit()
+                    # (committed inline via _execute)
                     st.success("✅ Expense updated!")
                     st.rerun()
 
         with eu2:
             if st.button("🗑️ Delete Expense", use_container_width=True, key="btn_delete"):
                 if pd.notna(e_ref) and "||" not in str(e_ref):
-                    cursor.execute("DELETE FROM expenses WHERE expense_ref=?", (e_ref,))
+                    _execute("DELETE FROM expenses WHERE expense_ref=?", (e_ref,))
                 else:
                     parts = str(e_ref).split("||")
                     if len(parts) == 4:
-                        cursor.execute(
+                        _execute(
                             "DELETE FROM expenses WHERE group_id=? AND description=? AND date=? AND paid_by=? AND currency=?",
                             (group_id, parts[0], parts[1], parts[2], parts[3])
                         )
                     else:
-                        cursor.execute("DELETE FROM expenses WHERE expense_ref=?", (e_ref,))
-                conn.commit()
+                        _execute("DELETE FROM expenses WHERE expense_ref=?", (e_ref,))
+                # (committed inline via _execute)
                 st.success("🗑️ Expense deleted!")
                 st.rerun()
 
